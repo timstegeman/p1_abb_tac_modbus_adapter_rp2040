@@ -4,15 +4,20 @@
 #include <hardware/irq.h>
 #include <hardware/uart.h>
 #include <hardware/watchdog.h>
+#include <pico/bootrom.h>
 #include <pico/stdlib.h>
 #include <stdio.h>
 
+#include "bsp/board.h"
 #include "dsmr.h"
-#include "modbus.h"
+#include "loadbalancer.h"
+#include "modbus_client.h"
+#include "modbus_server.h"
+#include "tusb.h"
 
-#define MB_SLAVE_ADDRESS 1
+#define MB_SLAVE_ADDRESS 10
 #define LED_BLINK_TIME   500
-#define DATA_VALID_TIME  20000
+#define LB_TASK_INTERVAL 1000
 #define LED_PIN          PICO_DEFAULT_LED_PIN
 #define DSMR_UART        uart0
 #define DSMR_UART_IRQ    UART0_IRQ
@@ -23,46 +28,24 @@
 #define MB_TX_PIN        8
 #define MB_RX_PIN        9
 
-#define MB_ACTIVE_IMPORT 0x5000  // 20480
-#define MB_VOLTAGE_L1_N  0x5b00  // 23296
-#define MB_VOLTAGE_L2_N  0x5b02  // 23298
-#define MB_VOLTAGE_L3_N  0x5b04  // 23300
-#define MB_CURRENT_L1    0x5b0c  // 23308
-#define MB_CURRENT_L2    0x5b0e  // 23310
-#define MB_CURRENT_L3    0x5b10  // 23312
-#define MB_POWER_TOTAL   0x5b14  // 23316
-#define MB_POWER_L1      0x5b16  // 23318
-#define MB_POWER_L2      0x5b18  // 23320
-#define MB_POWER_L3      0x5b1A  // 23322
-
-#define __swap32 __builtin_bswap32
-#define __swap64 __builtin_bswap64
-
-absolute_time_t data_timeout;
 absolute_time_t led_timeout;
+absolute_time_t lb_task_timeout;
 
-static struct {
-  uint64_t active_import_1;
-  uint64_t active_import_2;
-  uint32_t voltage_l1;
-  uint32_t voltage_l2;
-  uint32_t voltage_l3;
-  uint32_t current_l1;
-  uint32_t current_l2;
-  uint32_t current_l3;
-  int32_t power_l1;
-  int32_t power_l2;
-  int32_t power_l3;
-} registers;
+static struct mb_server_context mb_server_ctx;
+static struct mb_client_context mb_client_ctx;
 
-void mb_tx(uint8_t* data, uint32_t size) {
+void mb_client_tx(uint8_t* data, uint32_t size) {
   gpio_put(MB_DE_PIN, 1);
-
   uart_write_blocking(MB_UART, data, size);
 
   // Wait until fifo is drained so we now when to turn off the driver enable pin.
   uart_tx_wait_blocking(MB_UART);
   gpio_put(MB_DE_PIN, 0);
+}
+
+void mb_server_tx(uint8_t* data, uint32_t size) {
+  tud_cdc_n_write(1, data, size);
+  tud_cdc_n_write_flush(1);
 }
 
 uint32_t mb_get_tick_ms(void) {
@@ -76,135 +59,47 @@ void on_dsmr_rx() {
 }
 
 void on_mb_rx() {
-  mb_rx(uart_getc(MB_UART));
+  tud_cdc_n_write_char(1, uart_getc(MB_UART));
+  mb_client_rx(&mb_client_ctx, uart_getc(MB_UART));
 }
 
-static uint8_t mb_read_holding_register(uint16_t addr, uint16_t* reg) {
-  uint32_t power_total = registers.power_l1 + registers.power_l2 + registers.power_l3;
-  uint64_t active_import = registers.active_import_1 + registers.active_import_2;
-
-  switch (addr) {
-    case MB_ACTIVE_IMPORT:
-    case MB_ACTIVE_IMPORT + 1:
-    case MB_ACTIVE_IMPORT + 2:
-    case MB_ACTIVE_IMPORT + 3:
-      *reg = (__swap64(active_import) >> (16 * (addr - MB_ACTIVE_IMPORT))) & 0xFFFF;
-      break;
-
-    case MB_VOLTAGE_L1_N:
-    case MB_VOLTAGE_L1_N + 1:
-      *reg = (__swap32(registers.voltage_l1) >> (16 * (addr - MB_VOLTAGE_L1_N))) & 0xFFFF;
-      break;
-
-    case MB_VOLTAGE_L2_N:
-    case MB_VOLTAGE_L2_N + 1:
-      *reg = (__swap32(registers.voltage_l2) >> (16 * (addr - MB_VOLTAGE_L2_N))) & 0xFFFF;
-      break;
-
-    case MB_VOLTAGE_L3_N:
-    case MB_VOLTAGE_L3_N + 1:
-      *reg = (__swap32(registers.voltage_l3) >> (16 * (addr - MB_VOLTAGE_L3_N))) & 0xFFFF;
-      break;
-
-    case MB_CURRENT_L1:
-    case MB_CURRENT_L1 + 1:
-      *reg = (__swap32(registers.current_l1) >> (16 * (addr - MB_CURRENT_L1))) & 0xFFFF;
-      break;
-
-    case MB_CURRENT_L2:
-    case MB_CURRENT_L2 + 1:
-      *reg = (__swap32(registers.current_l2) >> (16 * (addr - MB_CURRENT_L2))) & 0xFFFF;
-      break;
-
-    case MB_CURRENT_L3:
-    case MB_CURRENT_L3 + 1:
-      *reg = (__swap32(registers.current_l3) >> (16 * (addr - MB_CURRENT_L3))) & 0xFFFF;
-      break;
-
-    case MB_POWER_TOTAL:
-    case MB_POWER_TOTAL + 1:
-      *reg = (__swap32(power_total) >> (16 * (addr - MB_POWER_TOTAL))) & 0xFFFF;
-      break;
-
-    case MB_POWER_L1:
-    case MB_POWER_L1 + 1:
-      *reg = (__swap32(registers.power_l1) >> (16 * (addr - MB_POWER_L1))) & 0xFFFF;
-      break;
-
-    case MB_POWER_L2:
-    case MB_POWER_L2 + 1:
-      *reg = (__swap32(registers.power_l2) >> (16 * (addr - MB_POWER_L2))) & 0xFFFF;
-      break;
-
-    case MB_POWER_L3:
-    case MB_POWER_L3 + 1:
-      *reg = (__swap32(registers.power_l3) >> (16 * (addr - MB_POWER_L3))) & 0xFFFF;
-      break;
-    default:
-      return MB_ERROR_ILLEGAL_DATA_ADDRESS;
-  }
-  return MB_NO_ERROR;
-}
-
-uint8_t mb_read_holding_registers(uint16_t start, uint16_t count) {
-  uint16_t val;
-  for (int i = 0; i < count; i++) {
-    if (mb_read_holding_register(start + i, &val) == MB_NO_ERROR) {
-      mb_response_add(val);
-    } else {
-      return MB_ERROR_ILLEGAL_DATA_ADDRESS;
+void tud_cdc_rx_cb(uint8_t i) {
+  char c;
+  if (i == 1) {
+    while (tud_cdc_n_available(i)) {
+      if (tud_cdc_n_read(i, &c, 1)) {
+        mb_server_rx(&mb_server_ctx, c);
+      }
     }
   }
-  return MB_NO_ERROR;
 }
 
 void dsmr_update(dsmr_msg_t obj, float value) {
   switch (obj) {
-    case MSG_ACTIVE_IMPORT_1:
-      registers.active_import_1 = (uint64_t)(value * 10000);
-      break;
-    case MSG_ACTIVE_IMPORT_2:
-      registers.active_import_2 = (uint64_t)(value * 10000);
-      break;
-    case MSG_VOLTAGE_L1:
-      registers.voltage_l1 = (uint32_t)(value * 10);
-      break;
-    case MSG_VOLTAGE_L2:
-      registers.voltage_l2 = (uint32_t)(value * 10);
-      break;
-    case MSG_VOLTAGE_L3:
-      registers.voltage_l3 = (uint32_t)(value * 10);
-      break;
     case MSG_CURRENT_L1:
-      registers.current_l1 = (uint32_t)(value * 100);
+      lb_set_grid_current(LB_PHASE_1, (uint32_t)value * 1000);
       break;
     case MSG_CURRENT_L2:
-      registers.current_l2 = (uint32_t)(value * 100);
+      lb_set_grid_current(LB_PHASE_2, (uint32_t)value * 1000);
       break;
     case MSG_CURRENT_L3:
-      registers.current_l3 = (uint32_t)(value * 100);
-      break;
-    case MSG_POWER_L1:
-      registers.power_l1 = (int32_t)(value * 100000);  // 1 kW to 0.01 W
-      break;
-    case MSG_POWER_L2:
-      registers.power_l2 = (int32_t)(value * 100000);  // 1 kW to 0.01 W
-      break;
-    case MSG_POWER_L3:
-      registers.power_l3 = (int32_t)(value * 100000);  // 1 kW to 0.01 W
+      lb_set_grid_current(LB_PHASE_3, (uint32_t)value * 1000);
       break;
     default:
       break;
   }
 
   gpio_put(LED_PIN, 1);
-  data_timeout = make_timeout_time_ms(DATA_VALID_TIME);
   led_timeout = make_timeout_time_ms(LED_BLINK_TIME);
 }
 
+static void limit_charger(uint16_t current) {
+  mb_client_write_single_register(&mb_client_ctx, 1, 0x4100, current);
+}
+
 void setup(void) {
-  gpio_init(LED_PIN);
-  gpio_set_dir(LED_PIN, GPIO_OUT);
+  board_init();
+  tud_init(TUD_OPT_RHPORT);
 
   gpio_init(MB_DE_PIN);
   gpio_set_dir(MB_DE_PIN, GPIO_OUT);
@@ -227,33 +122,67 @@ void setup(void) {
 
   uart_set_irq_enables(DSMR_UART, true, false);
   uart_set_irq_enables(MB_UART, true, false);
+}
 
-  dsmr_init();
-  mb_init(MB_SLAVE_ADDRESS);
+enum mb_result write_single_register(uint16_t start, uint16_t value) {
+  if (start == 0x4100) {
+    lb_set_charger_limit(value);
+    return MB_NO_ERROR;
+  }
+  return MB_ERROR_ILLEGAL_DATA_ADDRESS;
 }
 
 int main(void) {
+  setup();
   stdio_init_all();
-  printf("# P1 ABB Modbus Adapter\r\n");
+  printf("# P1 Load balancing modbus adapter\r\n");
 
   if (watchdog_caused_reboot()) {
-    printf("# Rebooted by Watchdog!\n");
+    printf("# Rebooted by watchdog!\n");
   } else {
     printf("# Clean boot\n");
   }
 
   watchdog_enable(100, 1);
 
-  setup();
+  uint16_t grid_limit = 25000;  // TODO Configure this over modbus
+  struct lb_config my_config = {.charger_limit = 16000,
+                                .number_of_phases = 1,
+                                .alarm_limit = grid_limit - 1000,
+                                .alarm_limit_wait_time = 1,
+                                .alarm_limit_change_amount = grid_limit / 2,
+                                .upper_limit = grid_limit - 3000,
+                                .upper_limit_wait_time = 5,
+                                .upper_limit_change_amount = 1000,
+                                .lower_limit = grid_limit - 6000,
+                                .lower_limit_change_amount = 1000,
+                                .fallback_limit = 0,
+                                .fallback_limit_wait_time = 30};
+  lb_init(&my_config, &limit_charger);
+
+  struct mb_server_cb server_cb = {.get_tick_ms = mb_get_tick_ms,
+                                   .tx = mb_server_tx,
+                                   .write_single_register = write_single_register,
+                                   .pass_through = mb_client_tx};
+  mb_server_init(&mb_server_ctx, MB_SLAVE_ADDRESS, &server_cb);
+
+  struct mb_client_cb client_cb = {.get_tick_ms = mb_get_tick_ms, .tx = mb_client_tx};
+  mb_client_init(&mb_client_ctx, &client_cb);
 
 #pragma clang diagnostic push
 #pragma ide diagnostic ignored "EndlessLoop"
   for (;;) {
+    tud_task();
+
     dsmr_process();
 
-    if (absolute_time_diff_us(data_timeout, get_absolute_time()) <= 0) {
-      //  Only process modbus data when we have up-to-date DSMR data
-      mb_process();
+    mb_server_task(&mb_server_ctx);
+
+    mb_client_task(&mb_client_ctx);
+
+    if (absolute_time_diff_us(lb_task_timeout, get_absolute_time()) > 0) {
+      lb_task(mb_get_tick_ms() / 1000);
+      lb_task_timeout = make_timeout_time_ms(LB_TASK_INTERVAL);
     }
 
     if (absolute_time_diff_us(led_timeout, get_absolute_time()) > 0) {
