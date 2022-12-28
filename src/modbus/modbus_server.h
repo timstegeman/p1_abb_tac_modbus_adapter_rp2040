@@ -8,7 +8,7 @@
 
 #include "modbus_common.h"
 
-#define MB_SERVER_TIMEOUT 100
+#define MB_SERVER_RECEIVE_TIMEOUT 100
 
 struct mb_server_cb {
   enum mb_result (*read_coil_status)(uint16_t start, uint16_t count);
@@ -20,7 +20,7 @@ struct mb_server_cb {
   enum mb_result (*write_multiple_coils)(uint16_t start, uint8_t* data, uint16_t count);
   enum mb_result (*write_multiple_registers)(uint16_t start, uint16_t* data, uint16_t count);
 
-  void (*pass_through)(uint8_t* data, uint32_t len);
+  void (*pass_thru)(uint8_t* data, uint32_t len);
 
   void (*tx)(uint8_t* data, uint32_t len);
   uint32_t (*get_tick_ms)(void);

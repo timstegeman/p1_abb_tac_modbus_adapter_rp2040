@@ -69,8 +69,8 @@ static void mb_error(struct mb_server_context* ctx, uint8_t err) {
 }
 
 void mb_server_response_add(struct mb_server_context* ctx, uint16_t value) {
-  ctx->response_buf[ctx->response_buf_pos++] = value & 0xFF;
   ctx->response_buf[ctx->response_buf_pos++] = (value >> 8) & 0xFF;
+  ctx->response_buf[ctx->response_buf_pos++] = value & 0xFF;
 
   if (ctx->response_frame->function <= MB_READ_INPUT_REGISTERS) {
     ctx->response_buf[2] += sizeof(uint16_t);  // Size byte
@@ -92,8 +92,8 @@ static void mb_rx_rtu(struct mb_server_context* ctx) {
   uint8_t res;
 
   if (ctx->request_frame->address != ctx->address || ctx->address == 0) {
-    if (ctx->cb.pass_through) {  // It's a valid frame, but not for use. Maybe someone else can handle it
-      ctx->cb.pass_through(ctx->request_buf, ctx->request_buf_pos);
+    if (ctx->cb.pass_thru) {  // It's a valid frame, but not for use. Maybe someone else can handle it
+      ctx->cb.pass_thru(ctx->request_buf, ctx->request_buf_pos);
     }
     return;
   }
@@ -182,7 +182,7 @@ int mb_server_init(struct mb_server_context* ctx, uint8_t address, struct mb_ser
 }
 
 void mb_server_rx(struct mb_server_context* ctx, uint8_t b) {
-  if (ctx->cb.get_tick_ms() - ctx->timeout > MB_SERVER_TIMEOUT) {
+  if (ctx->cb.get_tick_ms() - ctx->timeout > MB_SERVER_RECEIVE_TIMEOUT) {
     mb_reset_buf(ctx);
   }
   ctx->timeout = ctx->cb.get_tick_ms();

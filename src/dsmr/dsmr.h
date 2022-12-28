@@ -20,8 +20,8 @@ typedef enum {
   MSG_LAST
 } dsmr_msg_t;
 
-extern void dsmr_update(dsmr_msg_t obj, float value);
+typedef void(dsmr_update_cb_t)(dsmr_msg_t obj, float value);
 
-void dsmr_init(void);
+void dsmr_init(dsmr_update_cb_t* cb);
 void dsmr_rx(char b);
-void dsmr_process(void);
+void dsmr_task(void);

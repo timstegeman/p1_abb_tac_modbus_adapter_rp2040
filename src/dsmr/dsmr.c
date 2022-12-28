@@ -10,6 +10,8 @@ char dsmr_rx_buf[DSMR_RX_BUF_SIZE];
 char dsmr_rx_line_buf[DSMR_RX_BUF_SIZE];
 int dsmr_rx_buf_pos = 0;
 
+static dsmr_update_cb_t* dsmr_update_cb = NULL;
+
 const char* DSMR_OBJ[] = {
     // Mapped to dsmr_msg_t. Other objects will be ignored.
     "1-0:1.8.1",   // MSG_ACTIVE_IMPORT_1
@@ -25,15 +27,15 @@ const char* DSMR_OBJ[] = {
     "1-0:61.7.0"   // MSG_POWER_L3
 };
 
-void dsmr_process(void) {
+void dsmr_task(void) {
   int line_len = strlen(dsmr_rx_line_buf);
   if (line_len > 0) {
     for (int i = 0; i < MSG_LAST; i++) {
       int obj_len = strlen(DSMR_OBJ[i]);
       if (strncmp(DSMR_OBJ[i], dsmr_rx_line_buf, line_len > obj_len ? obj_len : line_len) == 0) {
         char* v = strchr(dsmr_rx_line_buf, '(') + 1;
-        if (v) {
-          dsmr_update(i, strtof(v, NULL));
+        if (v && dsmr_update_cb) {
+          dsmr_update_cb(i, strtof(v, NULL));
         }
         break;
       }
@@ -43,7 +45,8 @@ void dsmr_process(void) {
   }
 }
 
-void dsmr_init(void) {
+void dsmr_init(dsmr_update_cb_t* cb) {
+  dsmr_update_cb = cb;
   dsmr_rx_buf_pos = 0;
   dsmr_rx_line_buf[0] = '\0';
 }

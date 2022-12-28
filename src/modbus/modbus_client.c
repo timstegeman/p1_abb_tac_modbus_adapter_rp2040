@@ -3,6 +3,7 @@
 
 #include "modbus_client.h"
 
+#include <stdbool.h>
 #include <string.h>
 
 #include "modbus_internal.h"
@@ -34,7 +35,7 @@ static inline void mb_reset_buf(struct mb_client_context* ctx) {
 }
 
 void mb_client_rx(struct mb_client_context* ctx, uint8_t b) {
-  if (ctx->cb.get_tick_ms() - ctx->timeout > MB_CLIENT_TIMEOUT) {
+  if (ctx->cb.get_tick_ms() - ctx->timeout > MB_CLIENT_RECEIVE_TIMEOUT) {
     mb_reset_buf(ctx);
   }
   ctx->timeout = ctx->cb.get_tick_ms();
@@ -79,18 +80,26 @@ static void swap16array(uint16_t* data, uint8_t len) {
 }
 
 static void mb_rx_rtu(struct mb_client_context* ctx) {
+  if (!ctx->busy) {
+    // We didn't send a request
+    if (ctx->cb.pass_thru) {
+      ctx->cb.pass_thru(ctx->response_buf, ctx->response_buf_pos);
+    }
+    return;
+  }
+
   if (mb_calc_crc16(ctx->response_buf, ctx->response_buf_pos)) {
     // Invalid CRC
     mb_reset_buf(ctx);
     return;
   }
-
   uint8_t address = ctx->response_frame->address;
 
   if (ctx->response_frame->function & 0x80) {
     if (ctx->cb.error) {
       ctx->cb.error(address, ctx->response_frame->function & ~0x80, ctx->response_frame->data[0]);
     }
+    ctx->busy = false;
     mb_reset_buf(ctx);
     return;
   }
@@ -148,6 +157,7 @@ static void mb_rx_rtu(struct mb_client_context* ctx) {
       break;
   }
 
+  ctx->busy = false;
   mb_reset_buf(ctx);
 }
 
@@ -161,6 +171,10 @@ void mb_client_task(struct mb_client_context* ctx) {
     default:
     case MB_DATA_INCOMPLETE:
       break;
+  }
+  if (ctx->request_timeout > 0 && ctx->cb.get_tick_ms() - ctx->request_timeout > MB_CLIENT_REQUEST_TIMEOUT) {
+    ctx->busy = false;
+    mb_reset_buf(ctx);
   }
 }
 
@@ -182,6 +196,8 @@ int mb_client_read_write(struct mb_client_context* ctx, uint8_t address, uint8_t
   mb_request_add(ctx, count);
   mb_request_add(ctx, __builtin_bswap16(mb_calc_crc16(ctx->request_buf, ctx->request_buf_pos)));
   ctx->cb.tx(ctx->request_buf, ctx->request_buf_pos);
+  ctx->busy = true;
+  ctx->request_timeout = ctx->cb.get_tick_ms();
   return 0;
 }
 
@@ -211,10 +227,16 @@ int mb_client_write_single_register(struct mb_client_context* ctx, uint8_t addre
 
 int mb_client_write_multiple_coils(struct mb_client_context* ctx, uint8_t address, uint16_t start, uint8_t* data,
                                    uint16_t count) {
+  // TODO
   return -1;
 }
 
 int mb_client_write_multiple_registers(struct mb_client_context* ctx, uint8_t address, uint16_t start, uint16_t* data,
                                        uint16_t count) {
+  // TODO
   return -1;
+}
+
+bool mb_client_busy(struct mb_client_context* ctx) {
+  return ctx->busy;
 }
