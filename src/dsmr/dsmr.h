@@ -3,7 +3,7 @@
 
 #pragma once
 
-#define DSMR_RX_BUF_SIZE 64
+#define DSMR_RX_BUF_SIZE 128
 
 typedef enum {
   MSG_ACTIVE_IMPORT_1,
@@ -20,8 +20,8 @@ typedef enum {
   MSG_LAST
 } dsmr_msg_t;
 
-typedef void(dsmr_update_cb_t)(dsmr_msg_t obj, float value);
+typedef void (*dsmr_update_cb_t)(dsmr_msg_t obj, float value);
 
-void dsmr_init(dsmr_update_cb_t* cb);
+void dsmr_init(dsmr_update_cb_t cb);
 void dsmr_rx(char b);
 void dsmr_task(void);

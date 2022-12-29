@@ -1,7 +1,7 @@
 //  SPDX-FileCopyrightText: 2022 Tim Stegeman <tim.stegeman@gmail.com>
 //  SPDX-License-Identifier: MIT
 
-#include "modbus_internal.h"
+#include "modbus_common.h"
 
 uint16_t mb_calc_crc16(const uint8_t* buf, uint8_t len) {
   uint16_t crc = 0xFFFF;

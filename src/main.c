@@ -9,37 +9,31 @@
 #include <stdio.h>
 
 #include "bsp/board.h"
+#include "config.h"
 #include "dsmr.h"
 #include "loadbalancer.h"
 #include "modbus_client.h"
 #include "modbus_server.h"
+#include "registers.h"
 #include "tusb.h"
 
-#define MB_SLAVE_ADDRESS 10
-#define LED_BLINK_TIME   500
-#define LED_PIN          PICO_DEFAULT_LED_PIN
-#define DSMR_UART        uart0
-#define DSMR_UART_IRQ    UART0_IRQ
-#define DSMR_RX_PIN      17
-#define MB_UART          uart1
-#define MB_UART_IRQ      UART1_IRQ
-#define MB_DE_PIN        7
-#define MB_TX_PIN        8
-#define MB_RX_PIN        9
+#define LED_BLINK_TIME 500
+#define LED_PIN        PICO_DEFAULT_LED_PIN
+#define DSMR_UART      uart0
+#define DSMR_UART_IRQ  UART0_IRQ
+#define DSMR_RX_PIN    17
+#define MB_UART        uart1
+#define MB_UART_IRQ    UART1_IRQ
+#define MB_DE_PIN      7
+#define MB_TX_PIN      8
+#define MB_RX_PIN      9
 
-static const uint16_t grid_limit = 25000;  // TODO Configure this over modbus
-static struct lb_config my_config = {.charger_limit = 16000,
-                                     .number_of_phases = 3,
-                                     .alarm_limit = grid_limit - 1000,
-                                     .alarm_limit_wait_time = 1,
-                                     .alarm_limit_change_amount = grid_limit / 2,
-                                     .upper_limit = grid_limit - 3000,
-                                     .upper_limit_wait_time = 5,
-                                     .upper_limit_change_amount = 1000,
-                                     .lower_limit = grid_limit - 6000,
-                                     .lower_limit_change_amount = 1000,
-                                     .fallback_limit = 0,
-                                     .fallback_limit_wait_time = 30};
+/* TODO
+
+ Make sure that there is no concurrency issue
+ Make modbus registers for configuration
+
+ */
 
 static absolute_time_t led_timeout;
 static struct mb_server_context mb_server_ctx;
@@ -130,8 +124,8 @@ static void setup(void) {
   gpio_set_dir(MB_DE_PIN, GPIO_OUT);
   gpio_put(MB_DE_PIN, 0);
 
-  uart_init(DSMR_UART, 115200);  // P1
-  uart_init(MB_UART, 9600);      // Modbus
+  uart_init(DSMR_UART, 115200);  // P1/Smartmeter
+  uart_init(MB_UART, 9600);      // RS485/Modbus
 
   gpio_set_function(DSMR_RX_PIN, GPIO_FUNC_UART);
   gpio_set_function(MB_TX_PIN, GPIO_FUNC_UART);
@@ -149,12 +143,152 @@ static void setup(void) {
   uart_set_irq_enables(MB_UART, true, false);
 }
 
-static enum mb_result write_single_register(uint16_t start, uint16_t value) {
-  if (start == 0x4100) {
-    lb_set_charger_limit(value);
-    return MB_NO_ERROR;
+static enum mb_result write_single_register(uint16_t reg, uint16_t value) {
+  switch (reg) {
+    case 1010:
+      config.lb_config.charger_limit = value;
+      config_save();
+      return MB_NO_ERROR;
+    case 1011:
+      if (value == 0 || value > 3) {
+        return MB_ERROR_ILLEGAL_DATA_VALUE;
+      }
+      config.lb_config.number_of_phases = value & 0xF;
+      config_save();
+      return MB_NO_ERROR;
+    case 1012:
+      config.lb_config.alarm_limit = value;
+      config_save();
+      return MB_NO_ERROR;
+    case 1013:
+      if (value > 0xFF) {
+        return MB_ERROR_ILLEGAL_DATA_VALUE;
+      }
+      config.lb_config.alarm_limit_wait_time = value & 0xFF;
+      config_save();
+      return MB_NO_ERROR;
+    case 1014:
+      config.lb_config.alarm_limit_change_amount = value;
+      config_save();
+      return MB_NO_ERROR;
+    case 1015:
+      config.lb_config.upper_limit = value;
+      config_save();
+      return MB_NO_ERROR;
+    case 1016:
+      if (value > 0xFF) {
+        return MB_ERROR_ILLEGAL_DATA_VALUE;
+      }
+      config.lb_config.upper_limit_wait_time = value & 0xFF;
+      config_save();
+      return MB_NO_ERROR;
+    case 1017:
+      config.lb_config.upper_limit_change_amount = value;
+      config_save();
+      return MB_NO_ERROR;
+    case 1018:
+      config.lb_config.lower_limit = value;
+      config_save();
+      return MB_NO_ERROR;
+    case 1019:
+      if (value > 0xFF) {
+        return MB_ERROR_ILLEGAL_DATA_VALUE;
+      }
+      config.lb_config.lower_limit_wait_time = value & 0xFF;
+      config_save();
+      return MB_NO_ERROR;
+    case 1020:
+      config.lb_config.lower_limit_change_amount = value;
+      config_save();
+      return MB_NO_ERROR;
+    case 1021:
+      config.lb_config.fallback_limit = value;
+      config_save();
+      return MB_NO_ERROR;
+    case 1022:
+      if (value > 0xFF) {
+        return MB_ERROR_ILLEGAL_DATA_VALUE;
+      }
+      config.lb_config.fallback_limit_wait_time = value & 0xFF;
+      config_save();
+      return MB_NO_ERROR;
+    case 1099:
+      if (value > 0xFF) {
+        return MB_ERROR_ILLEGAL_DATA_VALUE;
+      }
+      config.address = value & 0xFF;
+      config_save();
+      return MB_NO_ERROR;
+    default:
+      return MB_ERROR_ILLEGAL_DATA_ADDRESS;
   }
-  return MB_ERROR_ILLEGAL_DATA_ADDRESS;
+}
+
+static enum mb_result read_single_holding_register(uint16_t reg, uint16_t* value) {
+  switch (reg) {
+    case MB_REG_CHARGER_LIMIT_OVERRIDE:
+      *value = lb_get_charger_limit_override();
+      return MB_NO_ERROR;
+    case MB_REG_CURRENT_LIMIT:
+      *value = lb_get_limit();
+      return MB_NO_ERROR;
+    case MB_REG_CURRENT_STATE:
+      *value = lb_get_state();
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_CHARGER_LIMIT:
+      *value = config.lb_config.charger_limit;
+      return MB_NO_ERROR;
+    case 1011:
+      *value = config.lb_config.number_of_phases;
+      return MB_NO_ERROR;
+    case 1012:
+      *value = config.lb_config.alarm_limit;
+      return MB_NO_ERROR;
+    case 1013:
+      *value = config.lb_config.alarm_limit_wait_time;
+      return MB_NO_ERROR;
+    case 1014:
+      *value = config.lb_config.alarm_limit_change_amount;
+      return MB_NO_ERROR;
+    case 1015:
+      *value = config.lb_config.upper_limit;
+      return MB_NO_ERROR;
+    case 1016:
+      *value = config.lb_config.upper_limit_wait_time;
+      return MB_NO_ERROR;
+    case 1017:
+      *value = config.lb_config.upper_limit_change_amount;
+      return MB_NO_ERROR;
+    case 1018:
+      *value = config.lb_config.lower_limit;
+      return MB_NO_ERROR;
+    case 1019:
+      *value = config.lb_config.lower_limit_wait_time;
+      return MB_NO_ERROR;
+    case 1020:
+      *value = config.lb_config.lower_limit_change_amount;
+      return MB_NO_ERROR;
+    case 1021:
+      *value = config.lb_config.fallback_limit;
+      return MB_NO_ERROR;
+    case 1022:
+      *value = config.lb_config.fallback_limit_wait_time;
+      return MB_NO_ERROR;
+    default:
+      return MB_ERROR_ILLEGAL_DATA_ADDRESS;
+  }
+}
+
+static enum mb_result read_holding_registers(uint16_t start, uint16_t count) {
+  uint16_t val;
+  for (int i = 0; i < count; i++) {
+    if (read_single_holding_register(start + i, &val) == MB_NO_ERROR) {
+      mb_server_response_add(&mb_server_ctx, val);
+    } else {
+      return MB_ERROR_ILLEGAL_DATA_ADDRESS;
+    }
+  }
+  return MB_NO_ERROR;
 }
 
 static void led_task() {
@@ -164,10 +298,7 @@ static void led_task() {
 }
 
 static void retry_modbus_request_task(void) {
-  if (temp_buffer_len == 0) {
-    return;
-  }
-  if (mb_client_busy(&mb_client_ctx)) {
+  if (temp_buffer_len == 0 || mb_client_busy(&mb_client_ctx)) {
     return;
   }
   mb_client_tx(temp_buffer, temp_buffer_len);
@@ -177,7 +308,7 @@ static void retry_modbus_request_task(void) {
 int main(void) {
   setup();
   stdio_init_all();
-  printf("# P1 Load balancing modbus adapter\r\n");
+  printf("# P1 Load balancing modbus controller\r\n");
 
   if (watchdog_caused_reboot()) {
     printf("# Rebooted by watchdog!\n");
@@ -187,18 +318,27 @@ int main(void) {
 
   watchdog_enable(100, 1);
 
-  lb_init(&my_config, &limit_charger);
+  config_load();
 
-  struct mb_server_cb server_cb = {.get_tick_ms = mb_get_tick_ms,
-                                   .tx = mb_server_tx,
-                                   .write_single_register = write_single_register,
-                                   .pass_thru = mb_client_tx_pass_thru};
-  mb_server_init(&mb_server_ctx, MB_SLAVE_ADDRESS, &server_cb);
-
-  struct mb_client_cb client_cb = {.get_tick_ms = mb_get_tick_ms, .tx = mb_client_tx, .pass_thru = mb_server_tx};
-  mb_client_init(&mb_client_ctx, &client_cb);
+  lb_init(&config.lb_config, limit_charger);
 
   dsmr_init(dsmr_update);
+
+  struct mb_server_cb server_cb = {
+      .get_tick_ms = mb_get_tick_ms,
+      .tx = mb_server_tx,
+      .write_single_register = write_single_register,
+      .read_holding_registers = read_holding_registers,
+      .pass_thru = mb_client_tx_pass_thru,
+  };
+  mb_server_init(&mb_server_ctx, config.address, &server_cb);
+
+  struct mb_client_cb client_cb = {
+      .get_tick_ms = mb_get_tick_ms,
+      .tx = mb_client_tx,
+      .pass_thru = mb_server_tx,
+  };
+  mb_client_init(&mb_client_ctx, &client_cb);
 
 #pragma clang diagnostic push
 #pragma ide diagnostic ignored "EndlessLoop"

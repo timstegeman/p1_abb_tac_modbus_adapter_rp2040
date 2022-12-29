@@ -5,6 +5,7 @@ add_subdirectory(loadbalancer)
 add_executable(p1_modbus
         main.c
         usb_descriptors.c
+        config.c
         )
 
 target_include_directories(p1_modbus PUBLIC ${CMAKE_CURRENT_LIST_DIR})

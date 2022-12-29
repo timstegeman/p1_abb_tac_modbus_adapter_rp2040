@@ -36,9 +36,12 @@ struct lb_config {
   uint8_t fallback_limit_wait_time;
 };
 
-typedef void(lb_limit_charger_cb(uint16_t current));
+typedef void (*lb_limit_charger_cb_t)(uint16_t current);
 
-void lb_init(struct lb_config* config, lb_limit_charger_cb* cb);
+void lb_init(struct lb_config* config, lb_limit_charger_cb_t cb);
 void lb_set_grid_current(enum lb_phase phase, uint16_t current);
-void lb_set_charger_limit(uint16_t current);
+void lb_set_charger_limit_override(uint16_t limit);
+uint16_t lb_get_charger_limit_override(void);
+enum lb_state lb_get_state(void);
+uint16_t lb_get_limit(void);
 void lb_task(uint32_t current_time);

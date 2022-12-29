@@ -9,15 +9,16 @@
 #define CHECK_INTERVAL_MS 1000
 
 static struct lb_config config;
-static lb_limit_charger_cb* lb_limit_charger;
+static lb_limit_charger_cb_t lb_limit_charger_cb;
 static uint16_t grid_current[3];
 static int charger_max_current;
 static enum lb_state state;
 static uint8_t wait_time, grid_current_age;
+static int charger_limit_override;
 
-void lb_init(struct lb_config* config_, lb_limit_charger_cb* lb_limit_charger_) {
+void lb_init(struct lb_config* config_, lb_limit_charger_cb_t lb_limit_charger_cb_) {
   config = *config_;
-  lb_limit_charger = lb_limit_charger_;
+  lb_limit_charger_cb = lb_limit_charger_cb_;
   memset(grid_current, 0, sizeof(grid_current));
   state = LB_STATE_NORMAL;
   charger_max_current = 0;
@@ -30,8 +31,12 @@ void lb_set_grid_current(enum lb_phase phase, uint16_t current) {
   grid_current_age = 0;
 }
 
-void lb_set_charger_limit(uint16_t current) {
-  config.charger_limit = current;
+void lb_set_charger_limit_override(uint16_t limit) {
+  charger_limit_override = limit;
+}
+
+uint16_t lb_get_charger_limit_override(void) {
+  return charger_limit_override;
 }
 
 static uint16_t get_max_grid_current(void) {
@@ -143,10 +148,16 @@ static void lb_check(uint32_t now) {
   if (charger_max_current < 0) {  // there is probably an over current somewhere else in the system
     charger_max_current = 0;
   } else if (charger_max_current > config.charger_limit) {
-    charger_max_current = config.charger_limit;
+    if (charger_max_current > charger_limit_override) {
+      charger_max_current = charger_limit_override;
+    } else {
+      charger_max_current = config.charger_limit;
+    }
   }
 
-  lb_limit_charger(charger_max_current);
+  if (lb_limit_charger_cb) {
+    lb_limit_charger_cb(charger_max_current);
+  }
 }
 
 void lb_task(uint32_t now) {
@@ -159,14 +170,22 @@ void lb_task(uint32_t now) {
   last = now;
 }
 
-/* SOME TEST CODE */
+uint16_t lb_get_limit(void) {
+  return charger_max_current;
+};
+
+enum lb_state lb_get_state(void) {
+  return state;
+};
+
 #if 0
+//TODO Move to unit test
 static void limit_charger(uint16_t current) {
   printf("Limit charger current to %d\n", current);
 }
 
 
-int main2() {
+void test(void) {
   uint16_t grid_limit = 25000;
   struct lb_config my_config = {.charger_limit = 16000,
                                 .number_of_phases = 1,
@@ -202,7 +221,5 @@ int main2() {
     }
     lb_task(i);
   }
-
-  return 0;
 }
 #endif

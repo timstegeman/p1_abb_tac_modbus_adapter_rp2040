@@ -3,10 +3,7 @@
 
 #include "modbus_server.h"
 
-#include <stdbool.h>
 #include <string.h>
-
-#include "modbus_internal.h"
 
 #define MB_UINT16(data) (uint16_t) __builtin_bswap16(*(uint16_t*)&data)
 

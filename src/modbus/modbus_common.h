@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <stdint.h>
 #define MB_MAX_RTU_FRAME_SIZE 256
 
 enum mb_result {
@@ -23,3 +24,11 @@ enum mb_function {
   MB_WRITE_MULTIPLE_COILS = 0x10,
   MB_WRITE_MULTIPLE_REGISTERS = 0x0F
 };
+
+struct __attribute((packed)) mb_rtu_frame {
+  uint8_t address;
+  uint8_t function;
+  uint8_t data[];
+};
+
+uint16_t mb_calc_crc16(const uint8_t* buf, uint8_t len);
