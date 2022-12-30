@@ -3,11 +3,15 @@
 
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
+
 #define MB_MAX_RTU_FRAME_SIZE 256
 #define MB_MAX_REGISTERS      123
 
 enum mb_result {
+  // Server errors
   MB_NO_ERROR = 0x00,
   MB_ERROR_ILLEGAL_FUNCTION = 0x01,
   MB_ERROR_ILLEGAL_DATA_ADDRESS = 0x02,
@@ -19,10 +23,11 @@ enum mb_result {
   MB_ERROR_MEMORY_PARITY = 0x08,
   MB_ERROR_GATEWAY_PATH_UNAVAILABLE = 0x0A,
   MB_ERROR_GATEWAY_TARGET_DEVICE_FAILED_TO_RESPONSE = 0x0B,
-  
-  // Below are not standard modbus errors. Only used internally.
+
+  // Client errors
   MB_ERROR_TIMEOUT = 0xF0,
-  MB_ERROR_UNEXPECTED_RESPONSE = 0xF1,
+  MB_ERROR_INVALID_CRC,
+  MB_ERROR_UNEXPECTED_RESPONSE,
 };
 
 enum mb_function {
@@ -39,7 +44,7 @@ enum mb_function {
 struct __attribute((packed)) mb_rtu_frame {
   uint8_t address;
   uint8_t function;
-  uint8_t data[];
+  uint8_t data[MB_MAX_RTU_FRAME_SIZE - 2];
 };
 
 uint16_t mb_calc_crc16(const uint8_t* buf, uint8_t len);

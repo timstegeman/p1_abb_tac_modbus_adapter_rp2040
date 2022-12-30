@@ -32,12 +32,9 @@
 static absolute_time_t led_timeout;
 static struct mb_server_context mb_server_ctx;
 static struct mb_client_context mb_client_ctx;
+static uint16_t system_error;
 
-static uint8_t temp_buffer[MB_MAX_RTU_FRAME_SIZE];
-static uint32_t temp_buffer_len;
-static uint16_t error;
-
-static void mb_client_tx(uint8_t* data, uint32_t size) {
+static void mb_client_tx(uint8_t* data, size_t size) {
   gpio_put(MB_DE_PIN, 1);
   uart_write_blocking(MB_UART, data, size);
 
@@ -46,17 +43,7 @@ static void mb_client_tx(uint8_t* data, uint32_t size) {
   gpio_put(MB_DE_PIN, 0);
 }
 
-static void mb_client_tx_pass_thru(uint8_t* data, uint32_t size) {
-  if (mb_client_busy(&mb_client_ctx)) {
-    // store and retry later
-    memcpy(temp_buffer, data, size);
-    temp_buffer_len = size;
-    return;
-  }
-  mb_client_tx(data, size);
-}
-
-static void mb_server_tx(uint8_t* data, uint32_t size) {
+static void mb_server_tx(uint8_t* data, size_t size) {
   if (tud_cdc_n_connected(USB_ITF_MB)) {
     tud_cdc_n_write(USB_ITF_MB, data, size);
     tud_cdc_n_write_flush(USB_ITF_MB);
@@ -117,12 +104,23 @@ static void dsmr_update(dsmr_msg_t obj, float value) {
 static void mb_client_status(uint8_t address, uint8_t function, uint8_t error_) {
   (void)address;
   (void)function;
-  error |= error_ & 0xFF;
+  system_error |= error_ & 0xFF;
 }
 
 static void limit_charger(uint16_t current) {
   // Only support for ABB Terra AC charger
-  mb_client_write_single_register(&mb_client_ctx, 1, 0x4100, current);
+
+  /*For quantities that are represented as more than 1 register, the most significant
+byte is found in the high byte of the first (lowest) register. The least significant
+byte is found in the low byte of the last (highest) register.*/
+
+#define ABB_TAC_SET_CHARGING_CURRENT_LIMIT 0x4100
+#define ABB_TAC_ADDRESS                    1
+
+  uint32_t value32 = current;
+  value32 = __builtin_bswap32(value32);
+  mb_client_write_multiple_registers(&mb_client_ctx, ABB_TAC_ADDRESS, ABB_TAC_SET_CHARGING_CURRENT_LIMIT,
+                                     (uint16_t*)&value32, 2);
 }
 
 static void sys_reset(void) {
@@ -235,7 +233,7 @@ static enum mb_result read_single_holding_register(uint16_t reg, uint16_t* value
       *value = lb_get_limit();
       return MB_NO_ERROR;
     case MB_REG_ERROR:
-      *value = error;
+      *value = system_error;
       return MB_NO_ERROR;
     case MB_REG_LB_STATE:
       *value = lb_get_state();
@@ -302,12 +300,8 @@ static void led_task() {
   }
 }
 
-static void retry_modbus_request_task(void) {
-  if (temp_buffer_len == 0 || mb_client_busy(&mb_client_ctx)) {
-    return;
-  }
-  mb_client_tx(temp_buffer, temp_buffer_len);
-  temp_buffer_len = 0;
+static void mb_client_tx_pass_thru(uint8_t* data, size_t size) {
+  mb_client_send_raw(&mb_client_ctx, data, size);
 }
 
 static void setup_uarts(void) {
@@ -372,7 +366,7 @@ int main(void) {
       .get_tick_ms = mb_get_tick_ms,
       .tx = mb_client_tx,
       .status = mb_client_status,
-      .pass_thru = mb_server_tx,
+      .raw_rx = mb_server_tx,
   };
   mb_client_init(&mb_client_ctx, &client_cb);
 
@@ -387,7 +381,6 @@ int main(void) {
     mb_client_task(&mb_client_ctx);
     lb_task(mb_get_tick_ms());
     led_task();
-    retry_modbus_request_task();
     watchdog_update();
   }
 #pragma clang diagnostic pop
