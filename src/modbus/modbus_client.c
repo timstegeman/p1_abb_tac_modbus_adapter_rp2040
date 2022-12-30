@@ -94,8 +94,8 @@ static void mb_rx_rtu(struct mb_client_context* ctx) {
   uint8_t address = ctx->response_frame->address;
 
   if (ctx->response_frame->function & 0x80) {
-    if (ctx->cb.error) {
-      ctx->cb.error(address, ctx->response_frame->function & ~0x80, ctx->response_frame->data[0]);
+    if (ctx->cb.status) {
+      ctx->cb.status(address, ctx->response_frame->function & ~0x80, ctx->response_frame->data[0]);
     }
     ctx->busy = false;
     mb_reset_buf(ctx);
@@ -128,27 +128,17 @@ static void mb_rx_rtu(struct mb_client_context* ctx) {
       }
       break;
     case MB_WRITE_SINGLE_COIL:
-      if (ctx->cb.write_single_coil) {
-        ctx->cb.write_single_coil(address, MB_UINT16(ctx->response_frame->data[0]),
-                                  MB_UINT16(ctx->response_frame->data[2]));
-      }
-      break;
     case MB_WRITE_SINGLE_REGISTER:
-      if (ctx->cb.write_single_register) {
-        ctx->cb.write_single_register(address, MB_UINT16(ctx->response_frame->data[0]),
-                                      MB_UINT16(ctx->response_frame->data[2]));
-      }
-      break;
     case MB_WRITE_MULTIPLE_COILS:
-      if (ctx->cb.write_multiple_coils) {
-        ctx->cb.write_multiple_coils(address, MB_UINT16(ctx->response_frame->data[0]),
-                                     MB_UINT16(ctx->response_frame->data[2]));
-      }
-      break;
     case MB_WRITE_MULTIPLE_REGISTERS:
-      if (ctx->cb.write_multiple_registers) {
-        ctx->cb.write_multiple_registers(address, MB_UINT16(ctx->response_frame->data[0]),
-                                         MB_UINT16(ctx->response_frame->data[2]));
+      if (ctx->cb.status) {
+        uint16_t start = MB_UINT16(ctx->response_frame->data[0]);
+        uint16_t count = MB_UINT16(ctx->response_frame->data[2]);
+        uint8_t error = 0;
+        if (start != ctx->request_start || count != ctx->request_count) {
+          error = MB_ERROR_UNEXPECTED_RESPONSE;
+        }
+        ctx->cb.status(address, ctx->response_frame->function, error);
       }
       break;
     default:
@@ -171,6 +161,10 @@ void mb_client_task(struct mb_client_context* ctx) {
       break;
   }
   if (ctx->request_timeout > 0 && ctx->cb.get_tick_ms() - ctx->request_timeout > MB_CLIENT_REQUEST_TIMEOUT) {
+    if (ctx->cb.status) {
+      ctx->cb.status(ctx->request_frame->address, ctx->request_frame->function, MB_ERROR_TIMEOUT);
+    }
+    ctx->request_timeout = 0;
     ctx->busy = false;
     mb_reset_buf(ctx);
   }
@@ -225,13 +219,13 @@ int mb_client_write_single_register(struct mb_client_context* ctx, uint8_t addre
 
 int mb_client_write_multiple_coils(struct mb_client_context* ctx, uint8_t address, uint16_t start, uint8_t* data,
                                    uint16_t count) {
-  // TODO
+  // TODO Not implemented
   return -1;
 }
 
 int mb_client_write_multiple_registers(struct mb_client_context* ctx, uint8_t address, uint16_t start, uint16_t* data,
                                        uint16_t count) {
-  // TODO
+  // TODO Not implemented
   return -1;
 }
 

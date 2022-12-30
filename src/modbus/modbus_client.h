@@ -16,12 +16,7 @@ struct mb_client_cb {
   void (*read_input_status)(uint8_t address, uint16_t start, uint16_t count, uint8_t* data);
   void (*read_holding_registers)(uint8_t address, uint16_t start, uint16_t count, uint16_t* data);
   void (*read_input_registers)(uint8_t address, uint16_t start, uint16_t count, uint16_t* data);
-  void (*write_single_coil)(uint8_t address, uint16_t start, uint16_t value);
-  void (*write_single_register)(uint8_t address, uint16_t start, uint16_t value);
-  void (*write_multiple_coils)(uint8_t address, uint16_t start, uint16_t count);
-  void (*write_multiple_registers)(uint8_t address, uint16_t start, uint16_t count);
-  void (*error)(uint8_t address, uint8_t function, uint8_t error_code);
-
+  void (*status)(uint8_t address, uint8_t function, uint8_t error_code);
   void (*pass_thru)(uint8_t* data, uint32_t len);
 
   void (*tx)(uint8_t* data, uint32_t len);

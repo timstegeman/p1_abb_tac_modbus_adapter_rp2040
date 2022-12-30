@@ -45,9 +45,6 @@ static inline void mb_reset_buf(struct mb_server_context* ctx) {
 }
 
 static void mb_response_tx(struct mb_server_context* ctx) {
-  // Fill in size byte
-  ctx->response_frame->data[0] = ctx->response_buf_pos - sizeof(struct mb_rtu_frame) - 1;
-
   // Calculate CRC
   uint16_t crc = mb_calc_crc16(ctx->response_buf, ctx->response_buf_pos);
   ctx->response_buf[ctx->response_buf_pos++] = crc & 0xFF;
@@ -70,7 +67,7 @@ void mb_server_response_add(struct mb_server_context* ctx, uint16_t value) {
   ctx->response_buf[ctx->response_buf_pos++] = value & 0xFF;
 
   if (ctx->response_frame->function <= MB_READ_INPUT_REGISTERS) {
-    ctx->response_buf[2] += sizeof(uint16_t);  // Size byte
+    ctx->response_frame->data[0] += sizeof(uint16_t);  // Size byte
   }
 }
 
@@ -86,6 +83,7 @@ void mb_response_reset(struct mb_server_context* ctx, uint8_t fn) {
 }
 
 static void mb_rx_rtu(struct mb_server_context* ctx) {
+  uint16_t registers[MB_MAX_REGISTERS];
   uint8_t res;
 
   if (ctx->request_frame->address != ctx->address || ctx->address == 0) {
@@ -104,7 +102,7 @@ static void mb_rx_rtu(struct mb_server_context* ctx) {
 
   uint16_t start = MB_UINT16(ctx->request_frame->data[0]);
   uint16_t value = MB_UINT16(ctx->request_frame->data[2]);
-  uint8_t* data = &ctx->request_frame->data[4];
+  //  uint8_t* data = &ctx->request_frame->data[5];
 
   mb_response_reset(ctx, ctx->request_frame->function);
   res = MB_ERROR_ILLEGAL_DATA_ADDRESS;
@@ -142,12 +140,26 @@ static void mb_rx_rtu(struct mb_server_context* ctx) {
       break;
     case MB_WRITE_MULTIPLE_COILS:
       if (ctx->cb.write_multiple_coils) {
-        res = ctx->cb.write_multiple_coils(start, data, value);
+        res = ctx->cb.write_multiple_coils(start, &ctx->request_frame->data[5], value);
+        if (res == MB_NO_ERROR) {
+          mb_server_response_add(ctx, start);
+          mb_server_response_add(ctx, value);
+        }
       }
       break;
     case MB_WRITE_MULTIPLE_REGISTERS:
       if (ctx->cb.write_multiple_registers) {
-        res = ctx->cb.write_multiple_registers(start, (uint16_t*)data, value);
+        // This will make sure the registers are aligned at 16 bits
+        memcpy(registers, &ctx->request_frame->data[5], ctx->request_frame->data[4]);
+
+        for (int i = 0; i < value; i++) {
+          registers[i] = __builtin_bswap16(registers[i]);
+        }
+        res = ctx->cb.write_multiple_registers(start, registers, value);
+        if (res == MB_NO_ERROR) {
+          mb_server_response_add(ctx, start);
+          mb_server_response_add(ctx, value);
+        }
       }
       break;
     default:

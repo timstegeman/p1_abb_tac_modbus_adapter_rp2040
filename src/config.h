@@ -9,8 +9,8 @@
 
 #include "loadbalancer.h"
 
-#define FLASH_SIZE          0x200000
-#define FLASH_CONFIG_OFFSET (FLASH_SIZE - FLASH_PAGE_SIZE)
+#define FLASH_ROM_OFFSET    0x10000000
+#define FLASH_CONFIG_OFFSET (PICO_FLASH_SIZE_BYTES - FLASH_PAGE_SIZE)
 
 struct config {
   uint8_t address;

@@ -10,14 +10,15 @@
 struct config config;
 
 void config_load(void) {
-  memcpy(&config, (void*)FLASH_CONFIG_OFFSET, sizeof(struct config));
+  memcpy(&config, (void*)(FLASH_CONFIG_OFFSET + FLASH_ROM_OFFSET), sizeof(struct config));
   if (mb_calc_crc16((uint8_t*)&config, sizeof(struct config))) {
     config_reset();
   }
 }
 
 void config_reset(void) {
-  // These are the factory(my home) default
+
+  // These are the (factory/my home) defaults
   config.address = 10;
   config.lb_config.charger_limit = 16000;
   config.lb_config.number_of_phases = 3;
@@ -31,6 +32,7 @@ void config_reset(void) {
   config.lb_config.lower_limit_change_amount = 1000;
   config.lb_config.fallback_limit = 0;
   config.lb_config.fallback_limit_wait_time = 30;
+
   config_save();
 }
 
