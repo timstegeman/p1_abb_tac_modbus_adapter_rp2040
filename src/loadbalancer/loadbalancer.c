@@ -161,13 +161,12 @@ static void lb_check(uint32_t now) {
 }
 
 void lb_task(uint32_t now) {
-  static uint32_t last = 0;
+  static uint32_t timeout = 0;
 
-  if ((now - last) > CHECK_INTERVAL_MS) {
+  if (timeout == 0 || now - timeout > CHECK_INTERVAL_MS) {
     lb_check(now / 1000);
+    timeout = now;
   }
-
-  last = now;
 }
 
 uint16_t lb_get_limit(void) {

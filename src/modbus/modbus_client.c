@@ -6,8 +6,6 @@
 #include <stdbool.h>
 #include <string.h>
 
-#define MB_UINT16(data) (uint16_t) __builtin_bswap16(*(uint16_t*)&data)
-
 enum mb_client_state {
   MB_DATA_READY = 0,  //
   MB_DATA_INCOMPLETE,
@@ -31,15 +29,12 @@ static inline void mb_reset(struct mb_client_context* ctx) {
   ctx->request_timeout = 0;
   if (ctx->current_request) {
     ctx->current_request->data[0] = 0;
+    ctx->current_request->ready = false;
     ctx->current_request = NULL;
   }
 }
 
 void mb_client_rx(struct mb_client_context* ctx, uint8_t b) {
-  if (ctx->cb.get_tick_ms() - ctx->timeout > MB_CLIENT_RECEIVE_TIMEOUT) {
-    mb_reset(ctx);
-  }
-  ctx->timeout = ctx->cb.get_tick_ms();
   if (ctx->response.pos < (sizeof(ctx->response.data) - 1)) {
     ctx->response.data[ctx->response.pos++] = b;
   }
@@ -55,7 +50,7 @@ static enum mb_client_state mb_check_buf(struct mb_client_context* ctx) {
       case MB_READ_INPUT_STATUS:
       case MB_READ_HOLDING_REGISTERS:
       case MB_READ_INPUT_REGISTERS:
-        if (ctx->response.pos == ctx->response.data[2] + 4) {
+        if (ctx->response.pos == ctx->response.frame.data[0] + 5) {
           return MB_DATA_READY;
         }
         break;
@@ -74,12 +69,6 @@ static enum mb_client_state mb_check_buf(struct mb_client_context* ctx) {
   return MB_DATA_INCOMPLETE;
 }
 
-static void swap16array(uint16_t* data, uint8_t len) {
-  for (uint8_t i = 0; i < len; i++) {
-    data[i] = __builtin_bswap16(data[i]);
-  }
-}
-
 static void mb_rx_rtu(struct mb_client_context* ctx) {
   uint16_t registers[MB_MAX_REGISTERS];
 
@@ -87,16 +76,16 @@ static void mb_rx_rtu(struct mb_client_context* ctx) {
     return;
   }
 
-  if (ctx->current_request->raw) {
-    if (ctx->cb.raw_rx) {
-      ctx->cb.raw_rx(ctx->response.data, ctx->response.pos);
+  if (mb_calc_crc16(ctx->response.data, ctx->response.pos)) {
+    if (ctx->cb.status) {
+      ctx->cb.status(ctx->current_request->frame.address, ctx->current_request->frame.function, MB_ERROR_INVALID_CRC);
     }
     return;
   }
 
-  if (mb_calc_crc16(ctx->response.data, ctx->response.pos)) {
-    if (ctx->cb.status) {
-      ctx->cb.status(ctx->current_request->frame.address, ctx->current_request->frame.function, MB_ERROR_INVALID_CRC);
+  if (ctx->current_request->raw) {
+    if (ctx->cb.raw_rx) {
+      ctx->cb.raw_rx(ctx->response.data, ctx->response.pos);
     }
     return;
   }
@@ -145,8 +134,8 @@ static void mb_rx_rtu(struct mb_client_context* ctx) {
     case MB_WRITE_MULTIPLE_COILS:
     case MB_WRITE_MULTIPLE_REGISTERS:
       if (ctx->cb.status) {
-        uint16_t start = MB_UINT16(ctx->response.frame.data[0]);
-        uint16_t count = MB_UINT16(ctx->response.frame.data[2]);
+        uint16_t start = (uint16_t)__builtin_bswap16(*(uint16_t*)&ctx->response.frame.data[0]);
+        uint16_t count = (uint16_t)__builtin_bswap16(*(uint16_t*)&ctx->response.frame.data[2]);
         uint8_t error = 0;
         if (start != ctx->current_request->start || count != ctx->current_request->count) {
           error = MB_ERROR_UNEXPECTED_RESPONSE;
@@ -181,20 +170,17 @@ void mb_client_task(struct mb_client_context* ctx) {
     mb_reset(ctx);
   }
 
-  // Check if we are still handling a request
-  if (ctx->current_request != NULL) {
-    return;
-  }
-
-  // Check if there is a new request available
-  for (int i = 0; i < MB_CLIENT_QUEUE_SIZE; i++) {
-    struct mb_client_buffer* request = &ctx->request_queue[i];
-    if (request->data[0] && request->ready) {
-      request->ready = false;
-      ctx->current_request = request;
-      ctx->cb.tx(request->data, request->pos);
-      ctx->request_timeout = ctx->cb.get_tick_ms();
-      return;
+  if (ctx->current_request == NULL) {
+    // Check if there is a new request available
+    for (int i = 0; i < MB_CLIENT_QUEUE_SIZE; i++) {
+      struct mb_client_buffer* request = &ctx->request_queue[i];
+      if (request->data[0] && request->ready) {
+        request->ready = false;
+        ctx->current_request = request;
+        ctx->cb.tx(request->data, request->pos);
+        ctx->request_timeout = ctx->cb.get_tick_ms();
+        return;
+      }
     }
   }
 }
@@ -206,7 +192,7 @@ static void mb_request_add(struct mb_client_buffer* request, uint16_t value) {
 
 static struct mb_client_buffer* get_request_buffer(struct mb_client_context* ctx) {
   for (int i = 0; i < MB_CLIENT_QUEUE_SIZE; i++) {
-    if (ctx->request_queue[i].data[0]) {
+    if (!ctx->request_queue[i].data[0]) {
       return &ctx->request_queue[i];
     }
   }

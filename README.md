@@ -40,10 +40,10 @@ The defaults are bases on an 11 kW charger on an 3 phase 25 A grid connection.
 
 #### Load balancer state
 
-| State | Description    |
-|-------|----------------|
-| 0     | In lower limit |
-| 1     | Normal         |
-| 2     | Upper limit    |
-| 3     | Alarm limit    |
-| 4     | Fallback       |
+| State | Description    | LED Indication                       |
+|-------|----------------|--------------------------------------|
+| 0     | Normal         | `._______` (1 pulse per second)      |
+| 1     | Lower limit    | `._._____` (2 pulses per second)     |
+| 2     | Upper limit    | `._._.___` (3 pulses per second)     |
+| 3     | Alarm limit    | `._._._._` (4 pulses per second)     |
+| 4     | Fallback/Error | `----____` (0.5 sec on, 0.5 sec off) |

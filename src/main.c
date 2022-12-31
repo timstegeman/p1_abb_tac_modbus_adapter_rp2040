@@ -21,12 +21,15 @@
 #define LED_BLINK_TIME 500
 #define DSMR_UART      uart0
 #define DSMR_UART_IRQ  UART0_IRQ
+#define DSMR_UART_BAUD 115200  // P1/Smartmeter
 #define DSMR_RX_PIN    17
 #define MB_UART        uart1
 #define MB_UART_IRQ    UART1_IRQ
+#define MB_UART_BAUD   9600  // RS485/Modbus
 #define MB_DE_PIN      7
 #define MB_TX_PIN      8
 #define MB_RX_PIN      9
+#define USB_ITF_DSMR   0
 #define USB_ITF_MB     1
 
 static absolute_time_t led_timeout;
@@ -43,10 +46,9 @@ static void mb_client_tx(uint8_t* data, size_t size) {
   gpio_put(MB_DE_PIN, 0);
 }
 
-static void mb_server_tx(uint8_t* data, size_t size) {
-  if (tud_cdc_n_connected(USB_ITF_MB)) {
-    tud_cdc_n_write(USB_ITF_MB, data, size);
-    tud_cdc_n_write_flush(USB_ITF_MB);
+static void on_mb_rx(void) {  // Interrupt
+  while (uart_is_readable(MB_UART)) {
+    mb_client_rx(&mb_client_ctx, uart_getc(MB_UART));
   }
 }
 
@@ -54,24 +56,27 @@ static uint32_t mb_get_tick_ms(void) {
   return time_us_64() / 1000;
 }
 
-static void on_dsmr_rx(void) {
-  char c = uart_getc(DSMR_UART);
-  dsmr_rx(c);
-
-  putchar(c);
+static void on_dsmr_rx(void) {  // Interrupt
+  while (uart_is_readable(DSMR_UART)) {
+    dsmr_rx(uart_getc(DSMR_UART));
+  }
 }
 
-static void on_mb_rx(void) {
-  char c = uart_getc(MB_UART);
-  mb_client_rx(&mb_client_ctx, c);
+static void dsmr_forward(char* data, size_t size) {
+  if (tud_cdc_n_connected(USB_ITF_DSMR)) {
+    tud_cdc_n_write(USB_ITF_DSMR, data, size);
+    tud_cdc_write_flush();
+  }
+}
 
+static void mb_server_tx(uint8_t* data, size_t size) {
   if (tud_cdc_n_connected(USB_ITF_MB)) {
-    tud_cdc_n_write_char(USB_ITF_MB, c);
+    tud_cdc_n_write(USB_ITF_MB, data, size);
     tud_cdc_n_write_flush(USB_ITF_MB);
   }
 }
 
-void tud_cdc_rx_cb(uint8_t i) {
+void tud_cdc_rx_cb(uint8_t i) {  // Interrupt
   char c;
   if (USB_ITF_MB == i) {
     while (tud_cdc_n_available(i)) {
@@ -82,7 +87,7 @@ void tud_cdc_rx_cb(uint8_t i) {
   }
 }
 
-static void dsmr_update(dsmr_msg_t obj, float value) {
+static void dsmr_update(enum dsmr_msg obj, float value) {
   switch (obj) {
     case MSG_CURRENT_L1:
       lb_set_grid_current(LB_PHASE_1, (uint32_t)value * 1000);
@@ -113,6 +118,8 @@ static void limit_charger(uint16_t current) {
   /*For quantities that are represented as more than 1 register, the most significant
 byte is found in the high byte of the first (lowest) register. The least significant
 byte is found in the low byte of the last (highest) register.*/
+
+  printf("# Limit charger to %d mA\n", current);
 
 #define ABB_TAC_SET_CHARGING_CURRENT_LIMIT 0x4100
 #define ABB_TAC_ADDRESS                    1
@@ -286,7 +293,7 @@ static enum mb_result read_holding_registers(uint16_t start, uint16_t count) {
   uint16_t val;
   for (int i = 0; i < count; i++) {
     if (read_single_holding_register(start + i, &val) == MB_NO_ERROR) {
-      mb_server_response_add(&mb_server_ctx, val);
+      mb_server_add_response(&mb_server_ctx, val);
     } else {
       return MB_ERROR_ILLEGAL_DATA_ADDRESS;
     }
@@ -300,7 +307,7 @@ static void led_task() {
   }
 }
 
-static void mb_client_tx_pass_thru(uint8_t* data, size_t size) {
+static void mb_client_tx_request(uint8_t* data, size_t size) {
   mb_client_send_raw(&mb_client_ctx, data, size);
 }
 
@@ -309,8 +316,8 @@ static void setup_uarts(void) {
   gpio_set_dir(MB_DE_PIN, GPIO_OUT);
   gpio_put(MB_DE_PIN, 0);
 
-  uart_init(DSMR_UART, 115200);  // P1/Smartmeter
-  uart_init(MB_UART, 9600);      // RS485/Modbus
+  uart_init(DSMR_UART, DSMR_UART_BAUD);
+  uart_init(MB_UART, MB_UART_BAUD);
 
   gpio_set_function(DSMR_RX_PIN, GPIO_FUNC_UART);
   gpio_set_function(MB_TX_PIN, GPIO_FUNC_UART);
@@ -350,7 +357,7 @@ int main(void) {
 
   lb_init(&config.lb_config, limit_charger);
 
-  dsmr_init(dsmr_update);
+  dsmr_init(dsmr_update, dsmr_forward);
 
   struct mb_server_cb server_cb = {
       .get_tick_ms = mb_get_tick_ms,
@@ -358,7 +365,7 @@ int main(void) {
       .write_single_register = write_single_holding_register,
       .read_holding_registers = read_holding_registers,
       .write_multiple_registers = write_holding_registers,
-      .pass_thru = mb_client_tx_pass_thru,
+      .raw_rx = mb_client_tx_request,
   };
   mb_server_init(&mb_server_ctx, config.address, &server_cb);
 

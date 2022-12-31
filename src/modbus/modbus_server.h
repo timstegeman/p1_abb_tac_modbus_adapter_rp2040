@@ -17,25 +17,29 @@ struct mb_server_cb {
   enum mb_result (*write_multiple_coils)(uint16_t start, uint8_t* data, uint16_t count);
   enum mb_result (*write_multiple_registers)(uint16_t start, uint16_t* data, uint16_t count);
 
-  void (*pass_thru)(uint8_t* data, size_t len);
+  void (*raw_rx)(uint8_t* data, size_t len);
 
   void (*tx)(uint8_t* data, size_t len);
   uint32_t (*get_tick_ms)(void);
 };
 
+struct mb_server_buffer {
+  union {
+    uint8_t data[MB_MAX_RTU_FRAME_SIZE];
+    struct mb_rtu_frame frame;
+  };
+  size_t pos;
+};
+
 struct mb_server_context {
   uint8_t address;
   struct mb_server_cb cb;
-  uint8_t request_buf[MB_MAX_RTU_FRAME_SIZE];
-  int request_buf_pos;
-  uint8_t response_buf[MB_MAX_RTU_FRAME_SIZE];
-  int response_buf_pos;
+  struct mb_server_buffer request;
+  struct mb_server_buffer response;
   uint32_t timeout;
-  struct mb_rtu_frame* request_frame;
-  struct mb_rtu_frame* response_frame;
 };
 
 int mb_server_init(struct mb_server_context* ctx, uint8_t address, struct mb_server_cb* cb);
 void mb_server_rx(struct mb_server_context* ctx, uint8_t b);
-void mb_server_response_add(struct mb_server_context* ctx, uint16_t value);
+void mb_server_add_response(struct mb_server_context* ctx, uint16_t value);
 void mb_server_task(struct mb_server_context* ctx);

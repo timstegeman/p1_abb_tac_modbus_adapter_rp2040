@@ -5,7 +5,6 @@
 
 #include "modbus_common.h"
 
-#define MB_CLIENT_RECEIVE_TIMEOUT 200
 #define MB_CLIENT_REQUEST_TIMEOUT 500
 #define MB_CLIENT_QUEUE_SIZE      10
 
@@ -38,8 +37,6 @@ struct mb_client_context {
   struct mb_client_buffer* current_request;
   struct mb_client_buffer request_queue[MB_CLIENT_QUEUE_SIZE];
   struct mb_client_buffer response;
-
-  uint32_t timeout;
   uint32_t request_timeout;
 };
 

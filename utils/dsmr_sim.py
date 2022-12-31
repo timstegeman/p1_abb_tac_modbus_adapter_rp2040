@@ -4,7 +4,7 @@ import time
 
 import serial
 
-PORT = "/dev/ttyUSB0"
+PORT = "/dev/serial/by-id/usb-Silicon_Labs_CP2104_USB_to_UART_Bridge_Controller_011F15F2-if00-port0"
 BAUD_RATE = 115200
 INTERVAL = 1
 TELEGRAM = '''
@@ -33,9 +33,9 @@ TELEGRAM = '''
 1-0:32.7.0(229.1*V)
 1-0:52.7.0(229.1*V)
 1-0:72.7.0(229.1*V)
-1-0:31.7.0(005*A)
-1-0:51.7.0(005*A)
-1-0:71.7.0(005*A)
+1-0:31.7.0(%03d*A)
+1-0:51.7.0(%03d*A)
+1-0:71.7.0(%03d*A)
 1-0:21.7.0(01.150*kW)
 1-0:41.7.0(01.150*kW)
 1-0:61.7.0(01.150*kW)
@@ -50,9 +50,11 @@ TELEGRAM = '''
 
 with serial.Serial(PORT, BAUD_RATE) as ser:
     i = 0
+    current = 5
     while True:
         i = i + 1
         print("Sending telegram", i, end='\r')
-        for line in TELEGRAM.splitlines():
+        t = TELEGRAM % (current, current, current)
+        for line in t.splitlines():
             ser.write(line.strip().encode('US-ASCII') + b"\r\n")
         time.sleep(INTERVAL)
