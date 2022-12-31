@@ -21,9 +21,11 @@ void lb_init(struct lb_config* config_, lb_limit_charger_cb_t lb_limit_charger_c
   lb_limit_charger_cb = lb_limit_charger_cb_;
   memset(grid_current, 0, sizeof(grid_current));
   state = LB_STATE_NORMAL;
-  charger_max_current = 0;
   wait_time = WAIT_TIME_UNSET;
   grid_current_age = WAIT_TIME_UNSET;
+  charger_max_current = 0;  // We start at zero and gradually go up
+
+  charger_limit_override = config_->charger_limit;
 }
 
 void lb_set_grid_current(enum lb_phase phase, uint16_t current) {
@@ -148,11 +150,11 @@ static void lb_check(uint32_t now) {
   if (charger_max_current < 0) {  // there is probably an over current somewhere else in the system
     charger_max_current = 0;
   } else if (charger_max_current > config.charger_limit) {
-    if (charger_max_current > charger_limit_override) {
-      charger_max_current = charger_limit_override;
-    } else {
-      charger_max_current = config.charger_limit;
-    }
+    charger_max_current = config.charger_limit;
+  }
+
+  if (charger_max_current > charger_limit_override) {
+    charger_max_current = charger_limit_override;
   }
 
   if (lb_limit_charger_cb) {
