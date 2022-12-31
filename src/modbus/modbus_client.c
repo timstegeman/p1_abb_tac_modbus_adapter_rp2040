@@ -284,7 +284,7 @@ int mb_client_write_multiple_registers(struct mb_client_context* ctx, uint8_t ad
   request->frame.function = MB_WRITE_MULTIPLE_REGISTERS;
   request->start = start;
   request->count = count;
-  request->pos = sizeof(struct mb_rtu_frame);
+  request->pos = offsetof(struct mb_client_buffer, frame.data);
   mb_request_add(request, start);
   mb_request_add(request, count);
 
