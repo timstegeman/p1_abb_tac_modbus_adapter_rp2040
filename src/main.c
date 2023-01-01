@@ -18,7 +18,6 @@
 #include "registers.h"
 #include "tusb.h"
 
-#define LED_BLINK_TIME 500
 #define DSMR_UART      uart0
 #define DSMR_UART_IRQ  UART0_IRQ
 #define DSMR_UART_BAUD 115200  // P1/Smartmeter
@@ -111,14 +110,14 @@ static void mb_client_status(uint8_t address, uint8_t function, uint8_t error_) 
 static void limit_charger(uint16_t current) {
   // Only support for ABB Terra AC charger
 
-  /*For quantities that are represented as more than 1 register, the most significant
-byte is found in the high byte of the first (lowest) register. The least significant
-byte is found in the low byte of the last (highest) register.*/
+  /* For quantities that are represented as more than 1 register, the most significant
+     byte is found in the high byte of the first (lowest) register. The least significant
+     byte is found in the low byte of the last (highest) register. */
 
   //  printf("# Limit charger to %d mA\n", current);
 
-#define ABB_TAC_SET_CHARGING_CURRENT_LIMIT 0x4100
 #define ABB_TAC_ADDRESS                    1
+#define ABB_TAC_SET_CHARGING_CURRENT_LIMIT 0x4100
 
   uint32_t value32 = current;
   value32 = __builtin_bswap32(value32);
@@ -151,7 +150,7 @@ static enum mb_result write_single_holding_register(uint16_t reg, uint16_t value
       config.lb_config.alarm_limit = value;
       return MB_NO_ERROR;
     case MB_REG_CONFIG_ALARM_LIMIT_WAIT_TIME:
-      if (value > 0xFF) {
+      if (value >= 0xFF) {
         return MB_ERROR_ILLEGAL_DATA_VALUE;
       }
       config.lb_config.alarm_limit_wait_time = value & 0xFF;
@@ -163,7 +162,7 @@ static enum mb_result write_single_holding_register(uint16_t reg, uint16_t value
       config.lb_config.upper_limit = value;
       return MB_NO_ERROR;
     case MB_REG_CONFIG_UPPER_LIMIT_WAIT_TIME:
-      if (value > 0xFF) {
+      if (value >= 0xFF) {
         return MB_ERROR_ILLEGAL_DATA_VALUE;
       }
       config.lb_config.upper_limit_wait_time = value & 0xFF;
@@ -175,7 +174,7 @@ static enum mb_result write_single_holding_register(uint16_t reg, uint16_t value
       config.lb_config.lower_limit = value;
       return MB_NO_ERROR;
     case MB_REG_CONFIG_LOWER_LIMIT_WAIT_TIME:
-      if (value > 0xFF) {
+      if (value >= 0xFF) {
         return MB_ERROR_ILLEGAL_DATA_VALUE;
       }
       config.lb_config.lower_limit_wait_time = value & 0xFF;
@@ -187,13 +186,13 @@ static enum mb_result write_single_holding_register(uint16_t reg, uint16_t value
       config.lb_config.fallback_limit = value;
       return MB_NO_ERROR;
     case MB_REG_CONFIG_FALLBACK_LIMIT_WAIT_TIME:
-      if (value > 0xFF) {
+      if (value >= 0xFF) {
         return MB_ERROR_ILLEGAL_DATA_VALUE;
       }
       config.lb_config.fallback_limit_wait_time = value & 0xFF;
       return MB_NO_ERROR;
     case MB_REG_CONFIG_ADDRESS:
-      if (value > 0xFF) {
+      if (value >= 0xFF) {
         return MB_ERROR_ILLEGAL_DATA_VALUE;
       }
       config.address = value & 0xFF;
