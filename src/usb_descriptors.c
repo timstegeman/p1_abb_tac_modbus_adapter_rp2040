@@ -59,8 +59,8 @@ const uint8_t* tud_descriptor_configuration_cb(__unused uint8_t index) {
 static char usbd_serial_str[PICO_UNIQUE_BOARD_ID_SIZE_BYTES * 2 + 1];
 char const* string_desc_arr[] = {
     (const char[]){0x09, 0x04},  // 0: is supported language is English (0x0409)
-    "Tim Stegeman",              // 1: Manufacturer
-    "P1 Modbus Controller",      // 2: Product
+    "Raspberry Pi",              // 1: Manufacturer
+    "Pico",                      // 2: Product
     usbd_serial_str,             // 3: Serials, should use chip ID
     "P1 Data",                   // 4: CDC Interface
     "RS485/Modbus"               // 5: CDC Interface
