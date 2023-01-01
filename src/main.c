@@ -32,7 +32,6 @@
 #define USB_ITF_DSMR   0
 #define USB_ITF_MB     1
 
-static absolute_time_t led_timeout;
 static struct mb_server_context mb_server_ctx;
 static struct mb_client_context mb_client_ctx;
 static uint16_t system_error;
@@ -101,9 +100,6 @@ static void dsmr_update(enum dsmr_msg obj, float value) {
     default:
       break;
   }
-
-  board_led_on();
-  led_timeout = make_timeout_time_ms(LED_BLINK_TIME);
 }
 
 static void mb_client_status(uint8_t address, uint8_t function, uint8_t error_) {
@@ -119,13 +115,14 @@ static void limit_charger(uint16_t current) {
 byte is found in the high byte of the first (lowest) register. The least significant
 byte is found in the low byte of the last (highest) register.*/
 
-  printf("# Limit charger to %d mA\n", current);
+  //  printf("# Limit charger to %d mA\n", current);
 
 #define ABB_TAC_SET_CHARGING_CURRENT_LIMIT 0x4100
 #define ABB_TAC_ADDRESS                    1
 
   uint32_t value32 = current;
   value32 = __builtin_bswap32(value32);
+
   mb_client_write_multiple_registers(&mb_client_ctx, ABB_TAC_ADDRESS, ABB_TAC_SET_CHARGING_CURRENT_LIMIT,
                                      (uint16_t*)&value32, 2);
 }
@@ -302,8 +299,26 @@ static enum mb_result read_holding_registers(uint16_t start, uint16_t count) {
 }
 
 static void led_task() {
-  if (absolute_time_diff_us(led_timeout, get_absolute_time()) > 0) {
-    board_led_off();
+  static bool on = false;
+  static absolute_time_t led_timer;
+  static int pulse_counter = 0;
+
+  uint8_t led_pulse_mode = lb_get_state();
+
+  if (absolute_time_diff_us(led_timer, get_absolute_time()) > 0) {
+    if (pulse_counter == 0) {
+      pulse_counter = led_pulse_mode == 4 ? 1 : (led_pulse_mode + 1);
+      led_timer = make_timeout_time_ms(1000);
+    } else if (on) {
+      board_led_off();
+      on = false;
+      led_timer = make_timeout_time_ms(led_pulse_mode == 4 ? 0 : 300);
+      pulse_counter--;
+    } else {
+      board_led_on();
+      on = true;
+      led_timer = make_timeout_time_ms(led_pulse_mode == 4 ? 1000 : 100);
+    }
   }
 }
 
