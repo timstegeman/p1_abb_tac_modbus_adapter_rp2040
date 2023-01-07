@@ -1,23 +1,38 @@
+# TODO
 modbus:
   - name: p1_load_balancer
     type: serial
     baudrate: 9600
     bytesize: 8
     method: rtu
-    parity: E
+    parity: N
     port: /dev/ttyACM1
     stopbits: 1
     sensors:
-      - name: P1_LB_state
-        unique_id: P1_LB_state
+      - name: P1_LB_current_override
+        unique_id: P1_LB_current_override
+        device_class: current
+        unit_of_measurement: "A"
         slave: 10
         address: 1000
+        data_type: uint32
+        scale: 0.001
+        precision: 1
       - name: P1_LB_current
         unique_id: P1_LB_current
         device_class: current
         unit_of_measurement: "A"
         slave: 10
-        address: 1010
+        address: 1001
         data_type: uint32
         scale: 0.001
         precision: 1
+      - name: P1_LB_error
+        unique_id: P1_LB_error
+        slave: 10
+        address: 1002
+      - name: P1_LB_state
+        unique_id: P1_LB_state
+        slave: 10
+        address: 1003
+        # TODO

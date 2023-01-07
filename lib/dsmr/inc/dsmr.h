@@ -20,7 +20,7 @@ enum dsmr_msg {
   MSG_POWER_L2,
   MSG_POWER_L3,
   MSG_LAST
-} dsmr_msg_t;
+};
 
 typedef void (*dsmr_value_cb_t)(enum dsmr_msg obj, float value);
 typedef void (*dsmr_forward_cb_t)(char* data, size_t len);

@@ -5,7 +5,7 @@
 
 #include "modbus_common.h"
 
-#define MB_SERVER_RECEIVE_TIMEOUT 100
+#define MB_SERVER_RECEIVE_TIMEOUT 500
 
 struct mb_server_cb {
   enum mb_result (*read_coil_status)(uint16_t start, uint16_t count);

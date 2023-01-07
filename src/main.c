@@ -33,7 +33,7 @@
 
 static struct mb_server_context mb_server_ctx;
 static struct mb_client_context mb_client_ctx;
-static uint16_t system_error;
+static uint16_t system_error = 0;
 
 static void mb_client_tx(uint8_t* data, size_t size) {
   gpio_put(MB_DE_PIN, 1);
@@ -86,15 +86,16 @@ void tud_cdc_rx_cb(uint8_t i) {  // Interrupt
 }
 
 static void dsmr_update(enum dsmr_msg obj, float value) {
+  int int_value = (int)value;
   switch (obj) {
     case MSG_CURRENT_L1:
-      lb_set_grid_current(LB_PHASE_1, (uint32_t)value * 1000);
+      lb_set_grid_current(LB_PHASE_1, int_value * 1000);
       break;
     case MSG_CURRENT_L2:
-      lb_set_grid_current(LB_PHASE_2, (uint32_t)value * 1000);
+      lb_set_grid_current(LB_PHASE_2, int_value * 1000);
       break;
     case MSG_CURRENT_L3:
-      lb_set_grid_current(LB_PHASE_3, (uint32_t)value * 1000);
+      lb_set_grid_current(LB_PHASE_3, int_value * 1000);
       break;
     default:
       break;

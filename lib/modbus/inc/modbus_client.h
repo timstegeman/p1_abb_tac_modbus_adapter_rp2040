@@ -5,7 +5,7 @@
 
 #include "modbus_common.h"
 
-#define MB_CLIENT_REQUEST_TIMEOUT 500
+#define MB_CLIENT_REQUEST_TIMEOUT 1000
 #define MB_CLIENT_QUEUE_SIZE      10
 
 struct mb_client_cb {

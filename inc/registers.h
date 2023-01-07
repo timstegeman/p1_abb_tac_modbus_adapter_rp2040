@@ -21,6 +21,3 @@
 #define MB_REG_CONFIG_ADDRESS                   1090  // W
 #define MB_REG_CONFIG_APPLY                     1091  // W
 #define MB_REG_CONFIG_FACTORY_RESET             1092  // W
-
-
-

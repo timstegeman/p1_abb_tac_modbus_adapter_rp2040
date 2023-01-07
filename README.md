@@ -47,3 +47,7 @@ The defaults are bases on an 11 kW charger on an 3 phase 25 A grid connection.
 | 2     | Upper limit    | `._._.___` (3 pulses per second)     |
 | 3     | Alarm limit    | `._._._._` (4 pulses per second)     |
 | 4     | Fallback/Error | `----____` (0.5 sec on, 0.5 sec off) |
+
+
+diagslave -m rtu -b 9600 -p none /dev/ttyUSB0
+modpoll -a 1 -0 -r 1000 -t 4 -1 -b 9600 -p none /dev/ttyACM1
