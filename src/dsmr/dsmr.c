@@ -6,8 +6,8 @@
 #include <stdbool.h>
 #include <string.h>
 
-#define DSMR_BUF_SIZE  256
-#define DSMR_LINE_SIZE 80
+#define DSMR_BUF_SIZE  512
+#define DSMR_LINE_SIZE 256
 
 static char dsmr_line[DSMR_LINE_SIZE];
 static size_t dsmr_line_pos;

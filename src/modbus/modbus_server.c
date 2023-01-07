@@ -76,6 +76,7 @@ static void mb_rx_rtu(struct mb_server_context* ctx) {
   // Check CRC
   if (mb_calc_crc16(ctx->request.data, ctx->request.pos)) {
     // Invalid CRC
+    printf("Invalid crc\n");
     return;
   }
 
@@ -86,6 +87,8 @@ static void mb_rx_rtu(struct mb_server_context* ctx) {
     }
     return;
   }
+
+  printf("mb_rx_rtu\n");
 
   uint16_t start = (uint16_t)__builtin_bswap16(*(uint16_t*)&ctx->request.frame.data[0]);
   uint16_t value = (uint16_t)__builtin_bswap16(*(uint16_t*)&ctx->request.frame.data[2]);
