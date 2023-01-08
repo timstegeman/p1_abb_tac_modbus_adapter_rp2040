@@ -10,6 +10,14 @@
 #define MB_MAX_RTU_FRAME_SIZE 256
 #define MB_MAX_REGISTERS      123
 
+enum mb_state {
+  MB_DATA_READY,
+  MB_DATA_INCOMPLETE,
+  MB_ERROR,
+  MB_INVALID_SERVER_ADDRESS,
+  MB_INVALID_FUNCTION,
+};
+
 enum mb_result {
   // Server errors
   MB_NO_ERROR = 0x00,

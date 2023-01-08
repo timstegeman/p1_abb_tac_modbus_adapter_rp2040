@@ -37,6 +37,7 @@ static uint16_t system_error = 0;
 
 static void mb_client_tx(uint8_t* data, size_t size) {
   gpio_put(MB_DE_PIN, 1);
+
   uart_write_blocking(MB_UART, data, size);
 
   // Wait until fifo is drained so we now when to turn off the driver enable pin.
@@ -45,9 +46,7 @@ static void mb_client_tx(uint8_t* data, size_t size) {
 }
 
 static void on_mb_rx(void) {  // Interrupt
-  while (uart_is_readable(MB_UART)) {
-    mb_client_rx(&mb_client_ctx, uart_getc(MB_UART));
-  }
+  mb_client_rx(&mb_client_ctx, uart_getc(MB_UART));
 }
 
 static uint32_t mb_get_tick_ms(void) {
@@ -119,9 +118,11 @@ static void limit_charger(uint16_t current) {
 
 #define ABB_TAC_ADDRESS                    1
 #define ABB_TAC_SET_CHARGING_CURRENT_LIMIT 0x4100
-
-  uint32_t value32 = current;
-  value32 = __builtin_bswap32(value32);
+  if (current > 15650) {
+    current = 15650;
+  }
+//  current -= 400;
+  uint32_t value32 = current << 16;  // We only have 16 bits
 
   mb_client_write_multiple_registers(&mb_client_ctx, ABB_TAC_ADDRESS, ABB_TAC_SET_CHARGING_CURRENT_LIMIT,
                                      (uint16_t*)&value32, 2);

@@ -6,13 +6,6 @@
 #include <stdbool.h>
 #include <string.h>
 
-enum mb_client_state {
-  MB_DATA_READY = 0,  //
-  MB_DATA_INCOMPLETE,
-  MB_INVALID_SERVER_ADDRESS,
-  MB_INVALID_FUNCTION
-};
-
 int mb_client_init(struct mb_client_context* ctx, struct mb_client_cb* cb) {
   memset(ctx, 0, sizeof(struct mb_client_context));
   ctx->cb = *cb;
@@ -40,10 +33,15 @@ void mb_client_rx(struct mb_client_context* ctx, uint8_t b) {
   }
 }
 
-static enum mb_client_state mb_check_buf(struct mb_client_context* ctx) {
-  if (ctx->response.pos > 5) {
+static enum mb_state mb_check_buf(struct mb_client_context* ctx) {
+  if (ctx->response.pos > 4) {
     if (ctx->response.frame.address != ctx->current_request->frame.address) {
       return MB_INVALID_SERVER_ADDRESS;
+    }
+    if (ctx->response.frame.function & 0x80) {
+      if (ctx->response.pos == 5) {
+        return MB_ERROR;
+      }
     }
     switch (ctx->response.frame.function) {
       case MB_READ_COIL_STATUS:
@@ -154,10 +152,12 @@ void mb_client_task(struct mb_client_context* ctx) {
     case MB_INVALID_FUNCTION:
       mb_reset(ctx);
       break;
+    case MB_ERROR:
     case MB_DATA_READY:
       mb_rx_rtu(ctx);
       mb_reset(ctx);
     default:
+    case MB_INVALID_SERVER_ADDRESS:
     case MB_DATA_INCOMPLETE:
       break;
   }
@@ -178,6 +178,7 @@ void mb_client_task(struct mb_client_context* ctx) {
         request->ready = false;
         ctx->current_request = request;
         ctx->cb.tx(request->data, request->pos);
+        ctx->response.pos = 0;
         ctx->request_timeout = ctx->cb.get_tick_ms();
         return;
       }

@@ -5,15 +5,13 @@
 
 #include <string.h>
 
-enum mb_server_state {
-  MB_DATA_READY = 0,  //
-  MB_DATA_INCOMPLETE,
-  MB_INVALID_SERVER_ADDRESS,
-  MB_INVALID_FUNCTION
-};
-
-static enum mb_server_state mb_check_buf(struct mb_server_context* ctx) {
-  if (ctx->request.pos > 5) {
+static enum mb_state mb_check_buf(struct mb_server_context* ctx) {
+  if (ctx->request.pos > 4) {
+    if (ctx->request.frame.function & 0x80) {
+      if (ctx->request.pos == 5) {
+        return MB_ERROR;
+      }
+    }
     switch (ctx->request.frame.function) {
       case MB_READ_COIL_STATUS:
       case MB_READ_INPUT_STATUS:
@@ -134,10 +132,6 @@ static void mb_rx_rtu(struct mb_server_context* ctx) {
     case MB_WRITE_MULTIPLE_COILS:
       if (ctx->cb.write_multiple_coils) {
         res = ctx->cb.write_multiple_coils(start, &ctx->request.frame.data[5], value);
-        if (res == MB_NO_ERROR) {
-          mb_server_add_response(ctx, start);
-          mb_server_add_response(ctx, value);
-        }
       }
       break;
     case MB_WRITE_MULTIPLE_REGISTERS:
@@ -149,17 +143,17 @@ static void mb_rx_rtu(struct mb_server_context* ctx) {
           registers[i] = __builtin_bswap16(registers[i]);
         }
         res = ctx->cb.write_multiple_registers(start, registers, value);
-        if (res == MB_NO_ERROR) {
-          mb_server_add_response(ctx, start);
-          mb_server_add_response(ctx, value);
-        }
       }
       break;
     default:
       break;
   }
 
-  if (res == MB_NO_ERROR) {
+  if (MB_NO_ERROR == res) {
+    if (ctx->request.frame.function >= MB_WRITE_SINGLE_COIL) {
+      mb_server_add_response(ctx, start);
+      mb_server_add_response(ctx, value);
+    }
     mb_response_tx(ctx);
   } else {
     mb_error(ctx, res);
@@ -196,6 +190,7 @@ void mb_server_task(struct mb_server_context* ctx) {
     case MB_INVALID_SERVER_ADDRESS:
       mb_reset(ctx);
       break;
+    case MB_ERROR:
     case MB_DATA_READY:
       mb_rx_rtu(ctx);
       mb_reset(ctx);

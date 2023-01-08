@@ -1,4 +1,3 @@
-# TODO
 modbus:
   - name: p1_load_balancer
     type: serial
