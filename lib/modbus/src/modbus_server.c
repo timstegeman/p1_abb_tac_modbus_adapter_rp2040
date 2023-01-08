@@ -44,8 +44,7 @@ static inline void mb_reset(struct mb_server_context* ctx) {
 
 static void mb_response_tx(struct mb_server_context* ctx) {
   // Calculate CRC
-  // TODO Figure out why crc is in reverse __builtin_bswap16
-  uint16_t crc = __builtin_bswap16(mb_calc_crc16(ctx->response.data, ctx->response.pos));
+  uint16_t crc = mb_calc_crc16(ctx->response.data, ctx->response.pos);
   ctx->response.data[ctx->response.pos++] = (crc >> 8) & 0xFF;
   ctx->response.data[ctx->response.pos++] = crc & 0xFF;
 

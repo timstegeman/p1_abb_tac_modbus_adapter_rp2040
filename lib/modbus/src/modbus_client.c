@@ -216,7 +216,7 @@ int mb_client_read_write(struct mb_client_context* ctx, uint8_t address, uint8_t
   request->pos = sizeof(struct mb_rtu_frame);
   mb_request_add(request, start);
   mb_request_add(request, count);
-  mb_request_add(request, __builtin_bswap16(mb_calc_crc16(request->data, request->pos)));
+  mb_request_add(request, mb_calc_crc16(request->data, request->pos));
   request->raw = false;
   request->ready = true;
   return 0;
@@ -293,7 +293,7 @@ int mb_client_write_multiple_registers(struct mb_client_context* ctx, uint8_t ad
     mb_request_add(request, data[i]);
   }
 
-  mb_request_add(request, __builtin_bswap16(mb_calc_crc16(request->data, request->pos)));
+  mb_request_add(request, mb_calc_crc16(request->data, request->pos));
   request->raw = false;
   request->ready = true;
   return 0;
