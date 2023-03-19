@@ -35,6 +35,12 @@ static struct mb_server_context mb_server_ctx;
 static struct mb_client_context mb_client_ctx;
 static uint16_t system_error = 0;
 
+void limit_charger(struct mb_client_context* ctx, uint16_t current);
+
+static void lb_limit_charger(uint16_t current) {
+  limit_charger(&mb_client_ctx, current);
+}
+
 static void mb_client_tx(uint8_t* data, size_t size) {
   gpio_put(MB_DE_PIN, 1);
 
@@ -105,27 +111,6 @@ static void mb_client_status(uint8_t address, uint8_t function, uint8_t error_) 
   (void)address;
   (void)function;
   system_error |= error_ & 0xFF;
-}
-
-static void limit_charger(uint16_t current) {
-  // Only support for ABB Terra AC charger
-
-  /* For quantities that are represented as more than 1 register, the most significant
-     byte is found in the high byte of the first (lowest) register. The least significant
-     byte is found in the low byte of the last (highest) register. */
-
-  //  printf("# Limit charger to %d mA\n", current);
-
-#define ABB_TAC_ADDRESS                    1
-#define ABB_TAC_SET_CHARGING_CURRENT_LIMIT 0x4100
-  if (current > 15650) {
-    current = 15650;
-  }
-//  current -= 400;
-  uint32_t value32 = current << 16;  // We only have 16 bits
-
-  mb_client_write_multiple_registers(&mb_client_ctx, ABB_TAC_ADDRESS, ABB_TAC_SET_CHARGING_CURRENT_LIMIT,
-                                     (uint16_t*)&value32, 2);
 }
 
 static void sys_reset(void) {
@@ -371,7 +356,7 @@ int main(void) {
 
   config_load();
 
-  lb_init(&config.lb_config, limit_charger);
+  lb_init(&config.lb_config, lb_limit_charger);
 
   dsmr_init(dsmr_update, dsmr_forward);
 

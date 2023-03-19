@@ -10,6 +10,7 @@ pico_sdk_init()
 add_subdirectory(lib)
 
 add_executable(p1_modbus
+        src/abb_terra_ac.c
         src/main.c
         src/usb_descriptors.c
         src/config.c
