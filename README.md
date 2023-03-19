@@ -51,3 +51,5 @@ The defaults are bases on an 11 kW charger on an 3 phase 25 A grid connection.
 
 diagslave -m rtu -b 9600 -p none /dev/ttyUSB0
 modpoll -a 1 -0 -r 1000 -t 4 -1 -b 9600 -p none /dev/ttyACM1
+
+Schematic and PCB are available on https://oshwlab.com/timstegeman/p1_modbus_loadbalancer
