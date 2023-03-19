@@ -2,60 +2,40 @@
 //  SPDX-License-Identifier: MIT
 
 #include <hardware/irq.h>
+#include <hardware/structs/scb.h>
 #include <hardware/uart.h>
 #include <hardware/watchdog.h>
+#include <pico/bootrom.h>
 #include <pico/stdlib.h>
 #include <stdio.h>
 
+#include "bsp/board.h"
+#include "config.h"
 #include "dsmr.h"
-#include "modbus.h"
+#include "loadbalancer.h"
+#include "modbus_client.h"
+#include "modbus_server.h"
+#include "registers.h"
+#include "tusb.h"
 
-#define MB_SLAVE_ADDRESS 1
-#define LED_BLINK_TIME   500
-#define DATA_VALID_TIME  20000
-#define LED_PIN          PICO_DEFAULT_LED_PIN
-#define DSMR_UART        uart0
-#define DSMR_UART_IRQ    UART0_IRQ
-#define DSMR_RX_PIN      17
-#define MB_UART          uart1
-#define MB_UART_IRQ      UART1_IRQ
-#define MB_DE_PIN        7
-#define MB_TX_PIN        8
-#define MB_RX_PIN        9
+#define DSMR_UART      uart0
+#define DSMR_UART_IRQ  UART0_IRQ
+#define DSMR_UART_BAUD 115200  // P1/Smartmeter
+#define DSMR_RX_PIN    17
+#define MB_UART        uart1
+#define MB_UART_IRQ    UART1_IRQ
+#define MB_UART_BAUD   9600  // RS485/Modbus
+#define MB_DE_PIN      7
+#define MB_TX_PIN      8
+#define MB_RX_PIN      9
+#define USB_ITF_DSMR   0
+#define USB_ITF_MB     1
 
-#define MB_ACTIVE_IMPORT 0x5000  // 20480
-#define MB_VOLTAGE_L1_N  0x5b00  // 23296
-#define MB_VOLTAGE_L2_N  0x5b02  // 23298
-#define MB_VOLTAGE_L3_N  0x5b04  // 23300
-#define MB_CURRENT_L1    0x5b0c  // 23308
-#define MB_CURRENT_L2    0x5b0e  // 23310
-#define MB_CURRENT_L3    0x5b10  // 23312
-#define MB_POWER_TOTAL   0x5b14  // 23316
-#define MB_POWER_L1      0x5b16  // 23318
-#define MB_POWER_L2      0x5b18  // 23320
-#define MB_POWER_L3      0x5b1A  // 23322
+static struct mb_server_context mb_server_ctx;
+static struct mb_client_context mb_client_ctx;
+static uint16_t system_error = 0;
 
-#define __swap32 __builtin_bswap32
-#define __swap64 __builtin_bswap64
-
-absolute_time_t data_timeout;
-absolute_time_t led_timeout;
-
-static struct {
-  uint64_t active_import_1;
-  uint64_t active_import_2;
-  uint32_t voltage_l1;
-  uint32_t voltage_l2;
-  uint32_t voltage_l3;
-  uint32_t current_l1;
-  uint32_t current_l2;
-  uint32_t current_l3;
-  int32_t power_l1;
-  int32_t power_l2;
-  int32_t power_l3;
-} registers;
-
-void mb_tx(uint8_t* data, uint32_t size) {
+static void mb_client_tx(uint8_t* data, size_t size) {
   gpio_put(MB_DE_PIN, 1);
 
   uart_write_blocking(MB_UART, data, size);
@@ -65,92 +45,253 @@ void mb_tx(uint8_t* data, uint32_t size) {
   gpio_put(MB_DE_PIN, 0);
 }
 
-uint32_t mb_get_tick_ms(void) {
+static void on_mb_rx(void) {  // Interrupt
+  mb_client_rx(&mb_client_ctx, uart_getc(MB_UART));
+}
+
+static uint32_t mb_get_tick_ms(void) {
   return time_us_64() / 1000;
 }
 
-void on_dsmr_rx() {
-  char c = uart_getc(DSMR_UART);
-  dsmr_rx(c);
-  putchar(c);
+static void on_dsmr_rx(void) {  // Interrupt
+  while (uart_is_readable(DSMR_UART)) {
+    dsmr_rx(uart_getc(DSMR_UART));
+  }
 }
 
-void on_mb_rx() {
-  mb_rx(uart_getc(MB_UART));
+static void dsmr_forward(char* data, size_t size) {
+  if (tud_cdc_n_connected(USB_ITF_DSMR)) {
+    tud_cdc_n_write(USB_ITF_DSMR, data, size);
+    tud_cdc_write_flush();
+  }
 }
 
-static uint8_t mb_read_holding_register(uint16_t addr, uint16_t* reg) {
-  uint32_t power_total = registers.power_l1 + registers.power_l2 + registers.power_l3;
-  uint64_t active_import = registers.active_import_1 + registers.active_import_2;
+static void mb_server_tx(uint8_t* data, size_t size) {
+  if (tud_cdc_n_connected(USB_ITF_MB)) {
+    tud_cdc_n_write(USB_ITF_MB, data, size);
+    tud_cdc_n_write_flush(USB_ITF_MB);
+  }
+}
 
-  switch (addr) {
-    case MB_ACTIVE_IMPORT:
-    case MB_ACTIVE_IMPORT + 1:
-    case MB_ACTIVE_IMPORT + 2:
-    case MB_ACTIVE_IMPORT + 3:
-      *reg = (__swap64(active_import) >> (16 * (addr - MB_ACTIVE_IMPORT))) & 0xFFFF;
+void tud_cdc_rx_cb(uint8_t i) {  // Interrupt
+  char c;
+  if (USB_ITF_MB == i) {
+    while (tud_cdc_n_available(i)) {
+      if (tud_cdc_n_read(i, &c, i)) {
+        mb_server_rx(&mb_server_ctx, c);
+      }
+    }
+  }
+}
+
+static void dsmr_update(enum dsmr_msg obj, float value) {
+  int int_value = (int)value;
+  switch (obj) {
+    case MSG_CURRENT_L1:
+      lb_set_grid_current(LB_PHASE_1, int_value * 1000);
       break;
-
-    case MB_VOLTAGE_L1_N:
-    case MB_VOLTAGE_L1_N + 1:
-      *reg = (__swap32(registers.voltage_l1) >> (16 * (addr - MB_VOLTAGE_L1_N))) & 0xFFFF;
+    case MSG_CURRENT_L2:
+      lb_set_grid_current(LB_PHASE_2, int_value * 1000);
       break;
-
-    case MB_VOLTAGE_L2_N:
-    case MB_VOLTAGE_L2_N + 1:
-      *reg = (__swap32(registers.voltage_l2) >> (16 * (addr - MB_VOLTAGE_L2_N))) & 0xFFFF;
-      break;
-
-    case MB_VOLTAGE_L3_N:
-    case MB_VOLTAGE_L3_N + 1:
-      *reg = (__swap32(registers.voltage_l3) >> (16 * (addr - MB_VOLTAGE_L3_N))) & 0xFFFF;
-      break;
-
-    case MB_CURRENT_L1:
-    case MB_CURRENT_L1 + 1:
-      *reg = (__swap32(registers.current_l1) >> (16 * (addr - MB_CURRENT_L1))) & 0xFFFF;
-      break;
-
-    case MB_CURRENT_L2:
-    case MB_CURRENT_L2 + 1:
-      *reg = (__swap32(registers.current_l2) >> (16 * (addr - MB_CURRENT_L2))) & 0xFFFF;
-      break;
-
-    case MB_CURRENT_L3:
-    case MB_CURRENT_L3 + 1:
-      *reg = (__swap32(registers.current_l3) >> (16 * (addr - MB_CURRENT_L3))) & 0xFFFF;
-      break;
-
-    case MB_POWER_TOTAL:
-    case MB_POWER_TOTAL + 1:
-      *reg = (__swap32(power_total) >> (16 * (addr - MB_POWER_TOTAL))) & 0xFFFF;
-      break;
-
-    case MB_POWER_L1:
-    case MB_POWER_L1 + 1:
-      *reg = (__swap32(registers.power_l1) >> (16 * (addr - MB_POWER_L1))) & 0xFFFF;
-      break;
-
-    case MB_POWER_L2:
-    case MB_POWER_L2 + 1:
-      *reg = (__swap32(registers.power_l2) >> (16 * (addr - MB_POWER_L2))) & 0xFFFF;
-      break;
-
-    case MB_POWER_L3:
-    case MB_POWER_L3 + 1:
-      *reg = (__swap32(registers.power_l3) >> (16 * (addr - MB_POWER_L3))) & 0xFFFF;
+    case MSG_CURRENT_L3:
+      lb_set_grid_current(LB_PHASE_3, int_value * 1000);
       break;
     default:
+      break;
+  }
+}
+
+static void mb_client_status(uint8_t address, uint8_t function, uint8_t error_) {
+  (void)address;
+  (void)function;
+  system_error |= error_ & 0xFF;
+}
+
+static void limit_charger(uint16_t current) {
+  // Only support for ABB Terra AC charger
+
+  /* For quantities that are represented as more than 1 register, the most significant
+     byte is found in the high byte of the first (lowest) register. The least significant
+     byte is found in the low byte of the last (highest) register. */
+
+  //  printf("# Limit charger to %d mA\n", current);
+
+#define ABB_TAC_ADDRESS                    1
+#define ABB_TAC_SET_CHARGING_CURRENT_LIMIT 0x4100
+  if (current > 15650) {
+    current = 15650;
+  }
+//  current -= 400;
+  uint32_t value32 = current << 16;  // We only have 16 bits
+
+  mb_client_write_multiple_registers(&mb_client_ctx, ABB_TAC_ADDRESS, ABB_TAC_SET_CHARGING_CURRENT_LIMIT,
+                                     (uint16_t*)&value32, 2);
+}
+
+static void sys_reset(void) {
+  scb_hw->aircr |= M0PLUS_AIRCR_SYSRESETREQ_BITS;
+  for (;;) {
+  }
+}
+
+static enum mb_result write_single_holding_register(uint16_t reg, uint16_t value) {
+  switch (reg) {
+    case MB_REG_CHARGER_LIMIT_OVERRIDE:
+      lb_set_charger_limit_override(value);
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_CHARGER_LIMIT:
+      config.lb_config.charger_limit = value;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_NUMBER_OF_PHASES:
+      if (value < 1 || value > 3) {
+        return MB_ERROR_ILLEGAL_DATA_VALUE;
+      }
+      config.lb_config.number_of_phases = value & 0xF;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_ALARM_LIMIT:
+      config.lb_config.alarm_limit = value;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_ALARM_LIMIT_WAIT_TIME:
+      if (value >= 0xFF) {
+        return MB_ERROR_ILLEGAL_DATA_VALUE;
+      }
+      config.lb_config.alarm_limit_wait_time = value & 0xFF;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_ALARM_LIMIT_CHANGE_AMOUNT:
+      config.lb_config.alarm_limit_change_amount = value;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_UPPER_LIMIT:
+      config.lb_config.upper_limit = value;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_UPPER_LIMIT_WAIT_TIME:
+      if (value >= 0xFF) {
+        return MB_ERROR_ILLEGAL_DATA_VALUE;
+      }
+      config.lb_config.upper_limit_wait_time = value & 0xFF;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_UPPER_LIMIT_CHANGE_AMOUNT:
+      config.lb_config.upper_limit_change_amount = value;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_LOWER_LIMIT:
+      config.lb_config.lower_limit = value;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_LOWER_LIMIT_WAIT_TIME:
+      if (value >= 0xFF) {
+        return MB_ERROR_ILLEGAL_DATA_VALUE;
+      }
+      config.lb_config.lower_limit_wait_time = value & 0xFF;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_LOWER_LIMIT_CHANGE_AMOUNT:
+      config.lb_config.lower_limit_change_amount = value;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_FALLBACK_LIMIT:
+      config.lb_config.fallback_limit = value;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_FALLBACK_LIMIT_WAIT_TIME:
+      if (value >= 0xFF) {
+        return MB_ERROR_ILLEGAL_DATA_VALUE;
+      }
+      config.lb_config.fallback_limit_wait_time = value & 0xFF;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_ADDRESS:
+      if (value >= 0xFF) {
+        return MB_ERROR_ILLEGAL_DATA_VALUE;
+      }
+      config.address = value & 0xFF;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_APPLY:
+      if (value == 1) {
+        config_save();
+        sys_reset();
+      }
+      return MB_ERROR_ILLEGAL_DATA_VALUE;
+    case MB_REG_CONFIG_FACTORY_RESET:
+      if (value == 1) {
+        config_reset();
+        sys_reset();
+        return MB_NO_ERROR;
+      }
+      return MB_ERROR_ILLEGAL_DATA_VALUE;
+    default:
       return MB_ERROR_ILLEGAL_DATA_ADDRESS;
+  }
+}
+
+static enum mb_result write_holding_registers(uint16_t start, uint16_t* data, uint16_t count) {
+  enum mb_result res;
+
+  for (int i = 0; i < count; i++) {
+    res = write_single_holding_register(start + i, data[i]);
+    if (res != MB_NO_ERROR) {
+      return res;
+    }
   }
   return MB_NO_ERROR;
 }
 
-uint8_t mb_read_holding_registers(uint16_t start, uint16_t count) {
+static enum mb_result read_single_holding_register(uint16_t reg, uint16_t* value) {
+  switch (reg) {
+    case MB_REG_CHARGER_LIMIT_OVERRIDE:
+      *value = lb_get_charger_limit_override();
+      return MB_NO_ERROR;
+    case MB_REG_CURRENT_LIMIT:
+      *value = lb_get_limit();
+      return MB_NO_ERROR;
+    case MB_REG_ERROR:
+      *value = system_error;
+      return MB_NO_ERROR;
+    case MB_REG_LB_STATE:
+      *value = lb_get_state();
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_CHARGER_LIMIT:
+      *value = config.lb_config.charger_limit;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_NUMBER_OF_PHASES:
+      *value = config.lb_config.number_of_phases;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_ALARM_LIMIT:
+      *value = config.lb_config.alarm_limit;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_ALARM_LIMIT_WAIT_TIME:
+      *value = config.lb_config.alarm_limit_wait_time;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_ALARM_LIMIT_CHANGE_AMOUNT:
+      *value = config.lb_config.alarm_limit_change_amount;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_UPPER_LIMIT:
+      *value = config.lb_config.upper_limit;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_UPPER_LIMIT_WAIT_TIME:
+      *value = config.lb_config.upper_limit_wait_time;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_UPPER_LIMIT_CHANGE_AMOUNT:
+      *value = config.lb_config.upper_limit_change_amount;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_LOWER_LIMIT:
+      *value = config.lb_config.lower_limit;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_LOWER_LIMIT_WAIT_TIME:
+      *value = config.lb_config.lower_limit_wait_time;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_LOWER_LIMIT_CHANGE_AMOUNT:
+      *value = config.lb_config.lower_limit_change_amount;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_FALLBACK_LIMIT:
+      *value = config.lb_config.fallback_limit;
+      return MB_NO_ERROR;
+    case MB_REG_CONFIG_FALLBACK_LIMIT_WAIT_TIME:
+      *value = config.lb_config.fallback_limit_wait_time;
+      return MB_NO_ERROR;
+    default:
+      return MB_ERROR_ILLEGAL_DATA_ADDRESS;
+  }
+}
+
+static enum mb_result read_holding_registers(uint16_t start, uint16_t count) {
   uint16_t val;
   for (int i = 0; i < count; i++) {
-    if (mb_read_holding_register(start + i, &val) == MB_NO_ERROR) {
-      mb_response_add(val);
+    if (read_single_holding_register(start + i, &val) == MB_NO_ERROR) {
+      mb_server_add_response(&mb_server_ctx, val);
     } else {
       return MB_ERROR_ILLEGAL_DATA_ADDRESS;
     }
@@ -158,64 +299,48 @@ uint8_t mb_read_holding_registers(uint16_t start, uint16_t count) {
   return MB_NO_ERROR;
 }
 
-void dsmr_update(dsmr_msg_t obj, float value) {
-  switch (obj) {
-    case MSG_ACTIVE_IMPORT_1:
-      registers.active_import_1 = (uint64_t)(value * 10000);
-      break;
-    case MSG_ACTIVE_IMPORT_2:
-      registers.active_import_2 = (uint64_t)(value * 10000);
-      break;
-    case MSG_VOLTAGE_L1:
-      registers.voltage_l1 = (uint32_t)(value * 10);
-      break;
-    case MSG_VOLTAGE_L2:
-      registers.voltage_l2 = (uint32_t)(value * 10);
-      break;
-    case MSG_VOLTAGE_L3:
-      registers.voltage_l3 = (uint32_t)(value * 10);
-      break;
-    case MSG_CURRENT_L1:
-      registers.current_l1 = (uint32_t)(value * 100);
-      break;
-    case MSG_CURRENT_L2:
-      registers.current_l2 = (uint32_t)(value * 100);
-      break;
-    case MSG_CURRENT_L3:
-      registers.current_l3 = (uint32_t)(value * 100);
-      break;
-    case MSG_POWER_L1:
-      registers.power_l1 = (int32_t)(value * 100000);  // 1 kW to 0.01 W
-      break;
-    case MSG_POWER_L2:
-      registers.power_l2 = (int32_t)(value * 100000);  // 1 kW to 0.01 W
-      break;
-    case MSG_POWER_L3:
-      registers.power_l3 = (int32_t)(value * 100000);  // 1 kW to 0.01 W
-      break;
-    default:
-      break;
-  }
+static void led_task() {
+  static bool on = false;
+  static absolute_time_t led_timer;
+  static int pulse_counter = 0;
 
-  gpio_put(LED_PIN, 1);
-  data_timeout = make_timeout_time_ms(DATA_VALID_TIME);
-  led_timeout = make_timeout_time_ms(LED_BLINK_TIME);
+  uint8_t led_pulse_mode = lb_get_state();
+
+  if (absolute_time_diff_us(led_timer, get_absolute_time()) > 0) {
+    if (pulse_counter == 0) {
+      pulse_counter = led_pulse_mode == 4 ? 1 : (led_pulse_mode + 1);
+      led_timer = make_timeout_time_ms(1000);
+    } else if (on) {
+      board_led_off();
+      on = false;
+      led_timer = make_timeout_time_ms(led_pulse_mode == 4 ? 0 : 300);
+      pulse_counter--;
+    } else {
+      board_led_on();
+      on = true;
+      led_timer = make_timeout_time_ms(led_pulse_mode == 4 ? 1000 : 100);
+    }
+  }
 }
 
-void setup(void) {
-  gpio_init(LED_PIN);
-  gpio_set_dir(LED_PIN, GPIO_OUT);
+static void mb_client_tx_request(uint8_t* data, size_t size) {
+  mb_client_send_raw(&mb_client_ctx, data, size);
+}
 
+static void setup_uarts(void) {
   gpio_init(MB_DE_PIN);
   gpio_set_dir(MB_DE_PIN, GPIO_OUT);
   gpio_put(MB_DE_PIN, 0);
 
-  uart_init(DSMR_UART, 115200);  // P1
-  uart_init(MB_UART, 9600);      // Modbus
+  uart_init(DSMR_UART, DSMR_UART_BAUD);
+  uart_init(MB_UART, MB_UART_BAUD);
 
   gpio_set_function(DSMR_RX_PIN, GPIO_FUNC_UART);
   gpio_set_function(MB_TX_PIN, GPIO_FUNC_UART);
   gpio_set_function(MB_RX_PIN, GPIO_FUNC_UART);
+
+  gpio_pull_down(MB_RX_PIN);
+  gpio_pull_down(DSMR_RX_PIN);
 
   uart_set_fifo_enabled(DSMR_UART, false);
   uart_set_fifo_enabled(MB_UART, false);
@@ -227,39 +352,58 @@ void setup(void) {
 
   uart_set_irq_enables(DSMR_UART, true, false);
   uart_set_irq_enables(MB_UART, true, false);
-
-  dsmr_init();
-  mb_init(MB_SLAVE_ADDRESS);
 }
 
 int main(void) {
-  stdio_init_all();
-  printf("# P1 ABB Modbus Adapter\r\n");
+  board_init();
+  tud_init(TUD_OPT_RHPORT);
+  stdio_usb_init();
 
   if (watchdog_caused_reboot()) {
-    printf("# Rebooted by Watchdog!\n");
+    printf("# Rebooted by watchdog!\n");
   } else {
     printf("# Clean boot\n");
   }
 
   watchdog_enable(100, 1);
 
-  setup();
+  setup_uarts();
+
+  config_load();
+
+  lb_init(&config.lb_config, limit_charger);
+
+  dsmr_init(dsmr_update, dsmr_forward);
+
+  struct mb_server_cb server_cb = {
+      .get_tick_ms = mb_get_tick_ms,
+      .tx = mb_server_tx,
+      .write_single_register = write_single_holding_register,
+      .read_holding_registers = read_holding_registers,
+      .write_multiple_registers = write_holding_registers,
+      .raw_rx = mb_client_tx_request,
+  };
+  mb_server_init(&mb_server_ctx, config.address, &server_cb);
+
+  struct mb_client_cb client_cb = {
+      .get_tick_ms = mb_get_tick_ms,
+      .tx = mb_client_tx,
+      .status = mb_client_status,
+      .raw_rx = mb_server_tx,
+  };
+  mb_client_init(&mb_client_ctx, &client_cb);
+
+  printf("# P1 Load balancing modbus controller\r\n");
 
 #pragma clang diagnostic push
 #pragma ide diagnostic ignored "EndlessLoop"
   for (;;) {
-    dsmr_process();
-
-    if (absolute_time_diff_us(data_timeout, get_absolute_time()) <= 0) {
-      //  Only process modbus data when we have up-to-date DSMR data
-      mb_process();
-    }
-
-    if (absolute_time_diff_us(led_timeout, get_absolute_time()) > 0) {
-      gpio_put(LED_PIN, 0);
-    }
-
+    tud_task();
+    dsmr_task();
+    mb_server_task(&mb_server_ctx);
+    mb_client_task(&mb_client_ctx);
+    lb_task(mb_get_tick_ms());
+    led_task();
     watchdog_update();
   }
 #pragma clang diagnostic pop

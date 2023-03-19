@@ -3,9 +3,11 @@
 
 #pragma once
 
-#define DSMR_RX_BUF_SIZE 64
+#include <stdint.h>
+#include <stdlib.h>
 
-typedef enum {
+#define DSMR_RX_BUF_SIZE 128
+enum dsmr_msg {
   MSG_ACTIVE_IMPORT_1,
   MSG_ACTIVE_IMPORT_2,
   MSG_VOLTAGE_L1,
@@ -18,10 +20,11 @@ typedef enum {
   MSG_POWER_L2,
   MSG_POWER_L3,
   MSG_LAST
-} dsmr_msg_t;
+};
 
-extern void dsmr_update(dsmr_msg_t obj, float value);
+typedef void (*dsmr_value_cb_t)(enum dsmr_msg obj, float value);
+typedef void (*dsmr_forward_cb_t)(char* data, size_t len);
 
-void dsmr_init(void);
+void dsmr_init(dsmr_value_cb_t value_cb, dsmr_forward_cb_t forward_cb);
 void dsmr_rx(char b);
-void dsmr_process(void);
+void dsmr_task(void);
